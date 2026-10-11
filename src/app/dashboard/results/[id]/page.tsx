@@ -25,6 +25,7 @@ interface QuestionDetail {
   id: string
   statement: string
   image_url: string | null
+  explanation?: string | null
   subjects: { name: string } | null
   options: OptionDetail[]
 }
@@ -145,6 +146,7 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
             id,
             statement,
             image_url,
+            explanation,
             subjects ( name ),
             options (
               id,
@@ -302,7 +304,12 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
                 >
                   📋 Lista Completa
                 </button>
-               
+                <button
+                  onClick={() => { setViewMode('review'); setReviewIndex(0); }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${viewMode === 'review' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  📖 Pasapalabras
+                </button>
               </div>
             )}
           </div>
@@ -484,6 +491,18 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
                   })}
                 </div>
 
+                {/* Explicación Pedagógica Opcional */}
+                {activeReviewItem.questions.explanation && (
+                  <div className="p-4 bg-indigo-950/40 border border-indigo-500/30 rounded-2xl space-y-1">
+                    <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase">
+                      <span>💡</span> Explicación / Retroalimentación:
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      {activeReviewItem.questions.explanation}
+                    </p>
+                  </div>
+                )}
+
                 <div className="flex justify-between items-center pt-4 border-t border-slate-800">
                   <button disabled={reviewIndex === 0} onClick={() => setReviewIndex((prev) => prev - 1)} className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-bold rounded-xl">← Anterior</button>
                   <button disabled={reviewIndex === filteredAnswers.length - 1} onClick={() => setReviewIndex((prev) => prev + 1)} className="px-5 py-2.5 bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold rounded-xl">Siguiente →</button>
@@ -530,6 +549,17 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
                       )
                     })}
                   </div>
+
+                  {question?.explanation && (
+                    <div className="p-4 bg-indigo-950/40 border border-indigo-500/30 rounded-2xl space-y-1 mt-2">
+                      <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase">
+                        <span>💡</span> Explicación / Retroalimentación:
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        {question.explanation}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )
             })}

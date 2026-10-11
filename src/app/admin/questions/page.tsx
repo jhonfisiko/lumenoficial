@@ -21,6 +21,7 @@ interface QuestionItem {
   id: string
   statement: string
   image_url: string | null
+  explanation: string | null
   subject_id: string
   created_at: string
   options: {
@@ -50,6 +51,7 @@ export default function AdminQuestionsPage() {
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
   const [statement, setStatement] = useState('')
   const [questionImageUrl, setQuestionImageUrl] = useState('')
+  const [explanation, setExplanation] = useState('') // 💡 Campo de Explicación Opcional
 
   // Control de subida de imágenes
   const [uploadingQuestionImg, setUploadingQuestionImg] = useState(false)
@@ -86,7 +88,7 @@ export default function AdminQuestionsPage() {
     setLoadingSubjects(false)
   }, [supabase])
 
-  // Cargar Preguntas de la Materia Seleccionada (para llamadas manuales después de guardar/eliminar)
+  // Cargar Preguntas de la Materia Seleccionada
   const loadQuestionsBySubject = useCallback(async (subjectId: string) => {
     if (!subjectId) return
     setLoadingQuestions(true)
@@ -96,6 +98,7 @@ export default function AdminQuestionsPage() {
         id,
         statement,
         image_url,
+        explanation,
         subject_id,
         created_at,
         options (
@@ -133,9 +136,7 @@ export default function AdminQuestionsPage() {
 
     fetchInitialSubjects()
 
-    return () => {
-      isMounted = false
-    }
+    return () => { isMounted = false }
   }, [supabase])
 
   // Reactividad cuando cambia la materia seleccionada
@@ -152,6 +153,7 @@ export default function AdminQuestionsPage() {
           id,
           statement,
           image_url,
+          explanation,
           subject_id,
           created_at,
           options (
@@ -177,9 +179,7 @@ export default function AdminQuestionsPage() {
 
     fetchQuestions()
 
-    return () => {
-      isMounted = false
-    }
+    return () => { isMounted = false }
   }, [selectedSubject, supabase])
 
   // Subir archivo a Supabase Storage
@@ -258,6 +258,7 @@ export default function AdminQuestionsPage() {
     setEditingQuestionId(question.id)
     setStatement(question.statement)
     setQuestionImageUrl(question.image_url || '')
+    setExplanation(question.explanation || '')
 
     if (question.options && question.options.length > 0) {
       const sortedOptions = [...question.options].sort((a, b) =>
@@ -274,13 +275,15 @@ export default function AdminQuestionsPage() {
       )
     }
     setActiveTab('create')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // Cancelar Edición
+  // Cancelar Edición / Limpiar Formulario
   const resetForm = () => {
     setEditingQuestionId(null)
     setStatement('')
     setQuestionImageUrl('')
+    setExplanation('')
     setOptions([
       { letter: 'A', text: '', imageUrl: '', isCorrect: true },
       { letter: 'B', text: '', imageUrl: '', isCorrect: false },
@@ -382,15 +385,18 @@ export default function AdminQuestionsPage() {
 
     setSubmitting(true)
 
+    const questionPayload = {
+      subject_id: selectedSubject,
+      statement: statement.trim(),
+      image_url: questionImageUrl.trim() || null,
+      explanation: explanation.trim() || null, // 👈 Se guarda la explicación pedagógica
+    }
+
     if (editingQuestionId) {
       // ACTUALIZAR PREGUNTA EXISTENTE
       const { error: qError } = await supabase
         .from('questions')
-        .update({
-          subject_id: selectedSubject,
-          statement: statement.trim(),
-          image_url: questionImageUrl.trim() || null,
-        })
+        .update(questionPayload)
         .eq('id', editingQuestionId)
 
       if (qError) {
@@ -422,11 +428,7 @@ export default function AdminQuestionsPage() {
       // CREAR NUEVA PREGUNTA
       const { data: questionData, error: qError } = await supabase
         .from('questions')
-        .insert({
-          subject_id: selectedSubject,
-          statement: statement.trim(),
-          image_url: questionImageUrl.trim() || null,
-        })
+        .insert(questionPayload)
         .select()
         .single()
 
@@ -464,7 +466,7 @@ export default function AdminQuestionsPage() {
   )
 
   return (
-    <div className="relative min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 selection:bg-orange-500 selection:text-white">
+    <div className="relative min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 selection:bg-orange-500 selection:text-white font-sans">
       
       {/* Luces Ambientales */}
       <div className="absolute top-0 right-1/4 w-[500px] h-[500px] bg-orange-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -483,7 +485,7 @@ export default function AdminQuestionsPage() {
               Banco de <span className="text-orange-500">Preguntas</span>
             </h1>
             <p className="text-xs text-slate-400">
-              Creación, edición y administración de preguntas ICFES por materia
+              Creación, edición y retroalimentación pedagógica de preguntas por materia
             </p>
           </div>
 
@@ -618,7 +620,21 @@ export default function AdminQuestionsPage() {
                 />
               </div>
 
-              {/* Zona Drag & Drop */}
+              {/* Explicación / Retroalimentación Pedagógica Opcional */}
+              <div>
+                <label className="block text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                  <span>💡</span> Explicación / Retroalimentación Pedagógica (Opcional)
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Justifica por qué la opción correcta es la acertada. Este texto se mostrará en la revisión del estudiante..."
+                  value={explanation}
+                  onChange={(e) => setExplanation(e.target.value)}
+                  className="w-full bg-indigo-950/20 border border-indigo-500/30 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              {/* Zona Drag & Drop de Imagen */}
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
                   Imagen para el Enunciado (Arrastra un archivo o pega la URL)
@@ -638,7 +654,6 @@ export default function AdminQuestionsPage() {
                     <p className="text-xs text-orange-400 font-bold animate-pulse">Subiendo imagen a Supabase Storage...</p>
                   ) : questionImageUrl ? (
                     <div className="space-y-2">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={questionImageUrl} alt="Pregunta" className="max-h-40 mx-auto rounded-lg border border-slate-800" />
                       <button
                         type="button"
@@ -750,7 +765,6 @@ export default function AdminQuestionsPage() {
                           <span className="text-[10px] text-orange-400 font-bold animate-pulse">Subiendo...</span>
                         ) : opt.imageUrl ? (
                           <div className="flex items-center gap-2 w-full justify-between">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={opt.imageUrl} alt={`Opción ${opt.letter}`} className="h-8 rounded" />
                             <button
                               type="button"
@@ -804,7 +818,6 @@ export default function AdminQuestionsPage() {
         {activeTab === 'list' && (
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl backdrop-blur-xl space-y-4">
             
-            {/* Buscador de preguntas */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
               <input
                 type="text"
@@ -837,7 +850,7 @@ export default function AdminQuestionsPage() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="space-y-1">
-                        <span className="px-2 py-0.5 bg-orange-500/10 border border-orange-500/20 text-orange-400 font-black text-[10px] rounded-md uppercase">
+                        <span className="px-2 py-0.5 bg-orange-500/10 border border-orange-500/20 text-orange-400 font-bold text-[10px] rounded-md uppercase">
                           Pregunta #{index + 1}
                         </span>
                         <p className="text-xs font-bold text-white leading-relaxed">{q.statement}</p>
@@ -846,7 +859,7 @@ export default function AdminQuestionsPage() {
                       <div className="flex items-center gap-2 shrink-0">
                         <button
                           onClick={() => handleEditQuestion(q)}
-                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-xs rounded-xl border border-slate-700 transition-all"
+                          className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 font-bold text-xs rounded-xl border border-amber-500/30 transition-all"
                         >
                           ✏️ Editar
                         </button>
@@ -854,32 +867,37 @@ export default function AdminQuestionsPage() {
                           onClick={() => handleDeleteQuestion(q.id)}
                           className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-bold text-xs rounded-xl border border-rose-500/30 transition-all"
                         >
-                          🗑️
+                          🗑️ Eliminar
                         </button>
                       </div>
                     </div>
 
-                    {q.image_url && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={q.image_url} alt="Adjunto" className="max-h-32 rounded-lg border border-slate-800" />
+                    {/* Explicación guardada */}
+                    {q.explanation && (
+                      <div className="p-3 bg-indigo-950/30 border border-indigo-500/30 rounded-xl space-y-1">
+                        <p className="text-[10px] font-bold text-indigo-400 uppercase flex items-center gap-1">
+                          <span>💡</span> Explicación Pedagógica:
+                        </p>
+                        <p className="text-xs text-slate-300 leading-relaxed">{q.explanation}</p>
+                      </div>
                     )}
 
                     {/* Opciones */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-900">
-                      {q.options?.map((opt) => (
+                      {q.options?.sort((a, b) => a.option_letter.localeCompare(b.option_letter)).map((opt) => (
                         <div
                           key={opt.id}
-                          className={`p-2.5 rounded-xl border text-xs flex items-center gap-2 ${
+                          className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${
                             opt.is_correct
                               ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 font-bold'
-                              : 'bg-slate-900/50 border-slate-800/80 text-slate-400'
+                              : 'bg-slate-900 border-slate-800 text-slate-400'
                           }`}
                         >
-                          <span className="font-black px-1.5 py-0.5 bg-slate-950 rounded text-[10px]">
-                            {opt.option_letter}
+                          <span>
+                            <strong className="mr-1.5 uppercase">{opt.option_letter}.</strong>
+                            {opt.option_text || 'Opción con imagen'}
                           </span>
-                          <span className="truncate">{opt.option_text || '(Opción con imagen)'}</span>
-                          {opt.is_correct && <span className="ml-auto text-emerald-400">✓</span>}
+                          {opt.is_correct && <span className="text-[10px] text-emerald-400">✓ Correcta</span>}
                         </div>
                       ))}
                     </div>
@@ -887,51 +905,46 @@ export default function AdminQuestionsPage() {
                 ))}
               </div>
             )}
-
           </div>
         )}
 
       </div>
 
-      {/* Modal de Eliminación Segura con Contraseña */}
+      {/* Modal para eliminar materia */}
       {showDeleteModal && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
-            <h3 className="text-lg font-black text-white">⚠️ Eliminar Materia</h3>
-            <p className="text-xs text-slate-400">
-              Esta acción es irreversible y eliminará la materia elegida. Por seguridad, ingresa tu contraseña de administrador para confirmar:
+            <h3 className="text-sm font-black text-white">⚠️ Confirmar Eliminación de Materia</h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Ingresa tu contraseña de administrador para confirmar la eliminación permanente de esta materia y sus preguntas vinculadas.
             </p>
-
-            <form onSubmit={handleDeleteSubjectWithAuth} className="space-y-4">
-              <input
-                type="password"
-                required
-                placeholder="Tu contraseña de administrador"
-                value={adminPassword}
-                onChange={(e) => setAdminPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-rose-500"
-              />
-
-              <div className="flex gap-2 justify-end">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowDeleteModal(false)
-                    setAdminPassword('')
-                  }}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={deletingSubject}
-                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl disabled:opacity-50 transition-all"
-                >
-                  {deletingSubject ? 'Validando...' : 'Confirmar Eliminación'}
-                </button>
-              </div>
-            </form>
+            <input
+              type="password"
+              placeholder="Contraseña del administrador..."
+              value={adminPassword}
+              onChange={(e) => setAdminPassword(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-rose-500"
+            />
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteModal(false)
+                  setAdminPassword('')
+                }}
+                className="px-4 py-2 bg-slate-800 text-slate-300 font-bold text-xs rounded-xl hover:bg-slate-700"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSubjectWithAuth}
+                disabled={deletingSubject || !adminPassword}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl disabled:opacity-40"
+              >
+                {deletingSubject ? 'Eliminando...' : 'Confirmar Eliminación'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -7,17 +7,40 @@ import Link from 'next/link'
 interface Resource {
   id: string
   title: string
+  description?: string | null
   category: 'material_pdf' | 'clase_grabada'
+  program_type?: 'preicfes_estandar' | 'preicfes_intensivo' | 'intensivo' | 'megaintensivo' | string
+  calendar_group?: 'A' | 'B' | 'G' | string
   drive_or_youtube_url: string
   subjects: { name: string } | null
 }
 
+const PROGRAM_CATEGORIES = [
+  { id: 'todos', label: 'Todas las Modalidades' },
+  { id: 'preicfes_estandar', label: 'PreICFES Estándar' },
+  { id: 'preicfes_intensivo', label: 'PreICFES Intensivo' },
+  { id: 'intensivo', label: 'Intensivo' },
+  { id: 'megaintensivo', label: 'Megaintensivo' },
+]
+
+const CALENDAR_GROUPS = [
+  { id: 'todos', label: 'Todos los Grupos' },
+  { id: 'A', label: 'Calendario A' },
+  { id: 'B', label: 'Calendario B' },
+  { id: 'G', label: 'Calendario G' },
+]
+
 export default function StudentMaterialsPage() {
   const [resources, setResources] = useState<Resource[]>([])
   const [subscriptionType, setSubscriptionType] = useState<string | null>(null)
+  
+  // Filtros
   const [activeTab, setActiveTab] = useState<'todos' | 'material_pdf' | 'clase_grabada'>('todos')
+  const [selectedProgram, setSelectedProgram] = useState<string>('todos')
+  const [selectedCalendar, setSelectedCalendar] = useState<string>('todos')
   const [selectedSubject, setSelectedSubject] = useState<string>('')
   const [searchTerm, setSearchTerm] = useState<string>('')
+  
   const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
 
@@ -41,10 +64,10 @@ export default function StudentMaterialsPage() {
         }
       }
 
-      // 2. Cargar recursos educativos exactamente con la consulta original que funciona
+      // 2. Cargar recursos educativos
       const { data: resData, error } = await supabase
         .from('resources')
-        .select('id, title, category, drive_or_youtube_url, subjects(name)')
+        .select('id, title, description, category, program_type, calendar_group, drive_or_youtube_url, subjects(name)')
         .order('created_at', { ascending: false })
 
       if (isMounted) {
@@ -75,7 +98,7 @@ export default function StudentMaterialsPage() {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 text-xs font-semibold space-y-3">
         <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-        <p>Cargando material de estudio...</p>
+        <p>Cargando biblioteca de materiales...</p>
       </div>
     )
   }
@@ -90,7 +113,7 @@ export default function StudentMaterialsPage() {
           </div>
           <h1 className="text-xl font-black text-white">Acceso Exclusivo PreICFES Completo</h1>
           <p className="text-slate-400 text-xs leading-relaxed">
-            Tu plan actual es <strong className="text-amber-400">Simulacro Único</strong>. Para acceder a la biblioteca de guías teóricas en PDF y videoclases grabadas, solicita la actualización a tu plan.
+            Tu plan actual es <strong className="text-amber-400">Simulacro Único</strong>. Para acceder a la biblioteca de guías teóricas en PDF y videoclases grabadas, solicita la actualización de tu plan.
           </p>
           <Link
             href="/dashboard"
@@ -108,12 +131,15 @@ export default function StudentMaterialsPage() {
     new Set(resources.map((r) => r.subjects?.name).filter(Boolean))
   ) as string[]
 
-  // Filtrado de recursos
+  // Filtrado exhaustivo de recursos
   const filteredResources = resources.filter((res) => {
     const matchesCategory = activeTab === 'todos' || res.category === activeTab
+    const matchesProgram = selectedProgram === 'todos' || res.program_type === selectedProgram
+    const matchesCalendar = selectedCalendar === 'todos' || res.calendar_group === selectedCalendar
     const matchesSubject = selectedSubject === '' || res.subjects?.name === selectedSubject
     const matchesSearch = searchTerm.trim() === '' || res.title.toLowerCase().includes(searchTerm.toLowerCase())
-    return matchesCategory && matchesSubject && matchesSearch
+    
+    return matchesCategory && matchesProgram && matchesCalendar && matchesSubject && matchesSearch
   })
 
   return (
@@ -129,14 +155,14 @@ export default function StudentMaterialsPage() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="px-2.5 py-1 bg-orange-500/10 border border-orange-500/20 text-orange-400 text-[10px] font-black uppercase tracking-wider rounded-lg">
-                Biblioteca Digital
+                Biblioteca Digital LUMEN
               </span>
             </div>
             <h1 className="text-2xl md:text-3xl font-black text-white tracking-tight">
               Material de <span className="text-orange-500">Estudio y Clases</span>
             </h1>
             <p className="text-xs text-slate-400">
-              Accede a las guías temáticas en PDF de Google Drive y las grabaciones explicativas de YouTube
+              Filtra por modalidad (PreICFES, Intensivo, Megaintensivo) y Calendario (A, B, G)
             </p>
           </div>
 
@@ -149,9 +175,9 @@ export default function StudentMaterialsPage() {
         </div>
 
         {/* Panel de Filtros y Búsqueda */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 md:p-6 shadow-xl backdrop-blur-xl space-y-4">
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-4 md:p-6 shadow-xl backdrop-blur-xl space-y-5">
           
-          {/* Pestañas de Tipo */}
+          {/* Pestañas de Tipo de Recurso */}
           <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-4">
             <button
               onClick={() => setActiveTab('todos')}
@@ -161,7 +187,7 @@ export default function StudentMaterialsPage() {
                   : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
               }`}
             >
-              Todos los Recursos ({resources.length})
+              Todos ({resources.length})
             </button>
             <button
               onClick={() => setActiveTab('material_pdf')}
@@ -185,15 +211,58 @@ export default function StudentMaterialsPage() {
             </button>
           </div>
 
-          {/* Buscador y Filtro por Materia */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Filtros Secundarios: Modalidad y Calendario */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-2 border-b border-slate-800/60">
+            {/* Modalidades / Programas */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Modalidad / Programa:</label>
+              <div className="flex flex-wrap gap-1.5">
+                {PROGRAM_CATEGORIES.map((prog) => (
+                  <button
+                    key={prog.id}
+                    onClick={() => setSelectedProgram(prog.id)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      selectedProgram === prog.id
+                        ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                        : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {prog.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Calendarios / Cohortes (A, B, G) */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Calendario / Grupo:</label>
+              <div className="flex flex-wrap gap-1.5">
+                {CALENDAR_GROUPS.map((cal) => (
+                  <button
+                    key={cal.id}
+                    onClick={() => setSelectedCalendar(cal.id)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      selectedCalendar === cal.id
+                        ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/40'
+                        : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    {cal.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Buscador y Selección de Materia */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
             <div>
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
                 Buscar por Título
               </label>
               <input
                 type="text"
-                placeholder="🔍 Escribe un tema o nombre..."
+                placeholder="🔍 Escribe un tema o concepto..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-orange-500"
@@ -218,12 +287,13 @@ export default function StudentMaterialsPage() {
               </select>
             </div>
           </div>
+
         </div>
 
         {/* Tarjetas de Recursos */}
         {filteredResources.length === 0 ? (
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-12 text-center text-slate-500 text-xs font-semibold">
-            No hay recursos disponibles en esta categoría por el momento.
+            No se encontraron recursos que coincidan con los filtros seleccionados.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -237,9 +307,9 @@ export default function StudentMaterialsPage() {
                   className="bg-slate-900/90 border border-slate-800 p-6 rounded-3xl shadow-xl backdrop-blur-xl flex flex-col justify-between hover:border-slate-700 transition-all space-y-4 group"
                 >
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
                       <span
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase ${
+                        className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase ${
                           isPdf
                             ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                             : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
@@ -247,14 +317,28 @@ export default function StudentMaterialsPage() {
                       >
                         {isPdf ? '📄 Documento PDF' : '🎬 Clase Grabada'}
                       </span>
-                      <span className="text-[10px] font-bold text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded-md border border-orange-500/20">
-                        {item.subjects?.name || 'General'}
-                      </span>
+
+                      <div className="flex items-center gap-1.5">
+                        {item.calendar_group && (
+                          <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">
+                            Cal. {item.calendar_group}
+                          </span>
+                        )}
+                        <span className="text-[10px] font-bold text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded-md border border-orange-500/20">
+                          {item.subjects?.name || 'General'}
+                        </span>
+                      </div>
                     </div>
 
                     <h3 className="font-bold text-white text-sm group-hover:text-orange-400 transition-colors leading-snug">
                       {item.title}
                     </h3>
+
+                    {item.description && (
+                      <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
+                        {item.description}
+                      </p>
+                    )}
                   </div>
 
                   <div className="pt-2">
