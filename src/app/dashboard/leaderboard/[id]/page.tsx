@@ -259,6 +259,10 @@ function LeaderboardContent({ params }: { params: Promise<{ id: string }> }) {
   )
 }
 
+export async function generateStaticParams() {
+  return []
+}
+
 export default function SimulationLeaderboardPage(props: { params: Promise<{ id: string }> }) {
   return (
     <Suspense

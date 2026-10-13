@@ -1,10 +1,18 @@
-import type { Metadata } from 'next'
+import { connection } from 'next/server'
+import { Suspense } from 'react'
 
-export const metadata: Metadata = {
-  title: 'Tabla de Liderazgo | PRE ICFES LUMEN',
-  description: 'Ranking y posiciones en vivo del simulacro tipo tesoro.',
+async function DynamicMarker() {
+  await connection()
+  return null
 }
 
 export default function LeaderboardLayout({ children }: { children: React.ReactNode }) {
-  return <>{children}</>
+  return (
+    <>
+      <Suspense fallback={null}>
+        <DynamicMarker />
+      </Suspense>
+      {children}
+    </>
+  )
 }
