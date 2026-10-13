@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, use } from 'react'
+import { useState, useEffect, use, Suspense } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
 
@@ -21,7 +21,7 @@ interface SimulationInfo {
   description: string | null
 }
 
-export default function SimulationLeaderboardPage({ params }: { params: Promise<{ id: string }> }) {
+function LeaderboardContent({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params)
   const simulationId = resolvedParams?.id
 
@@ -256,5 +256,20 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
 
       </div>
     </div>
+  )
+}
+
+export default function SimulationLeaderboardPage(props: { params: Promise<{ id: string }> }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 text-xs font-semibold space-y-3">
+          <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+          <p>Cargando posiciones de la competencia...</p>
+        </div>
+      }
+    >
+      <LeaderboardContent {...props} />
+    </Suspense>
   )
 }
