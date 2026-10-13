@@ -22,7 +22,6 @@ interface SimulationInfo {
 }
 
 export default function SimulationLeaderboardPage({ params }: { params: Promise<{ id: string }> }) {
-  // Desempaquetar los parámetros dinámicos de forma segura
   const resolvedParams = use(params)
   const simulationId = resolvedParams?.id
 
@@ -42,7 +41,6 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
     const fetchLeaderboardData = async () => {
       setLoading(true)
 
-      // 1. Verificar si el usuario actual es Administrador o Docente
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
         const { data: profile } = await supabase
@@ -56,7 +54,6 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
         }
       }
 
-      // 2. Obtener información general del simulacro
       const { data: simData } = await supabase
         .from('simulations')
         .select('title, description')
@@ -67,7 +64,6 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
         setSimulation(simData)
       }
 
-      // 3. Obtener los mejores puntajes registrados
       const { data: attemptsData, error } = await supabase
         .from('student_attempts')
         .select(`
@@ -102,7 +98,6 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
     }
   }, [supabase, simulationId])
 
-  // Función para reiniciar/limpiar el ranking a cero
   const handleResetLeaderboard = async () => {
     if (!simulationId) return
 
@@ -141,12 +136,10 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
   return (
     <div className="relative min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 font-sans selection:bg-amber-500 selection:text-slate-950">
       
-      {/* Resplandor Neón */}
       <div className="absolute top-0 right-1/3 w-[600px] h-[600px] bg-amber-500/10 rounded-full blur-[140px] pointer-events-none" />
 
       <div className="relative z-10 max-w-5xl mx-auto space-y-8">
         
-        {/* Encabezado */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
           <div>
             <div className="flex items-center gap-2">
@@ -163,7 +156,6 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
           </div>
 
           <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-            {/* Botón Administrador: Limpiar Ranking */}
             {isAdmin && (
               <button
                 onClick={handleResetLeaderboard}
@@ -184,7 +176,6 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
           </div>
         </div>
 
-        {/* Contenido de la Tabla de Posiciones */}
         {leaderboard.length === 0 ? (
           <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-8 text-center space-y-3 backdrop-blur-xl">
             <p className="text-amber-400 font-bold text-sm">🏆 ¡El Ranking está limpio y listo!</p>
