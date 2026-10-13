@@ -1,8 +1,5 @@
 'use client'
 
-export const dynamic = 'force-dynamic'
-export const revalidate = 0
-
 import { useState, useEffect, use } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
@@ -25,7 +22,9 @@ interface SimulationInfo {
 }
 
 export default function SimulationLeaderboardPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id: simulationId } = use(params)
+  // Desempaquetar los parámetros dinámicos de forma segura
+  const resolvedParams = use(params)
+  const simulationId = resolvedParams?.id
 
   const [simulation, setSimulation] = useState<SimulationInfo | null>(null)
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
@@ -37,6 +36,8 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
 
   useEffect(() => {
     let isMounted = true
+
+    if (!simulationId) return
 
     const fetchLeaderboardData = async () => {
       setLoading(true)
@@ -103,6 +104,8 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
 
   // Función para reiniciar/limpiar el ranking a cero
   const handleResetLeaderboard = async () => {
+    if (!simulationId) return
+
     const confirmed = window.confirm(
       `⚠️ ¿Estás seguro de REINICIAR EL RANKING de "${simulation?.title}"?\n\nEsta acción borrará todos los puntajes registrados de este examen para iniciar una nueva competencia.`
     )
@@ -111,7 +114,6 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
 
     setIsDeleting(true)
 
-    // Eliminar los intentos guardados para este simulacro en Supabase
     const { error } = await supabase
       .from('student_attempts')
       .delete()
@@ -123,7 +125,7 @@ export default function SimulationLeaderboardPage({ params }: { params: Promise<
       alert(`Error al intentar reiniciar el ranking: ${error.message}`)
     } else {
       alert('✅ El ranking se ha limpiado correctamente. El tablero está listo para una nueva prueba.')
-      setLeaderboard([]) // Limpia el estado local
+      setLeaderboard([])
     }
   }
 
