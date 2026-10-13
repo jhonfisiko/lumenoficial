@@ -1,17 +1,25 @@
 import { Suspense } from 'react'
 import LeaderboardClient from './LeaderboardClient'
 
-export async function generateStaticParams() {
-  return []
+export const metadata = {
+  title: 'Tabla de Liderazgo | PRE ICFES LUMEN',
+  description: 'Ranking y posiciones en vivo del simulacro.',
 }
 
-export default async function SimulationLeaderboardPage({
+async function LeaderboardContent({
   params,
 }: {
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  return <LeaderboardClient simulationId={id} />
+}
 
+export default function SimulationLeaderboardPage({
+  params,
+}: {
+  params: Promise<{ id: string }>
+}) {
   return (
     <Suspense
       fallback={
@@ -21,7 +29,7 @@ export default async function SimulationLeaderboardPage({
         </div>
       }
     >
-      <LeaderboardClient simulationId={id} />
+      <LeaderboardContent params={params} />
     </Suspense>
   )
 }
