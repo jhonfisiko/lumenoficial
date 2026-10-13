@@ -42,6 +42,9 @@ interface Simulation {
 const CURRENT_YEAR = new Date().getFullYear()
 const YEAR_OPTIONS = [CURRENT_YEAR - 1, CURRENT_YEAR, CURRENT_YEAR + 1, CURRENT_YEAR + 2]
 
+// Tipos de suscripción válidos según el ENUM en Supabase
+const VALID_SUBSCRIPTIONS = ['simulacro_unico', 'preicfes_completo']
+
 export default function AdminSimulationsPage() {
   const [activeTab, setActiveTab] = useState<'create' | 'list'>('create')
 
@@ -64,6 +67,8 @@ export default function AdminSimulationsPage() {
   const [isActive, setIsActive] = useState<boolean>(true)
   const [durationPart1, setDurationPart1] = useState(60)
   const [durationPart2, setDurationPart2] = useState(270)
+  
+  // Permisos válidos únicamente
   const [allowedRoles, setAllowedRoles] = useState<string[]>(['simulacro_unico', 'preicfes_completo'])
 
   // Selección de preguntas
@@ -102,7 +107,7 @@ export default function AdminSimulationsPage() {
     setLoading(false)
   }, [supabase])
 
-  // Carga inicial optimizada (cumple con las reglas del React Compiler / React 19)
+  // Carga inicial optimizada
   useEffect(() => {
     let isMounted = true
 
@@ -142,12 +147,12 @@ export default function AdminSimulationsPage() {
     })
   }, [questions, questionFilterSubject, questionSearchTerm])
 
-  // Preguntas visibles en Jornada 1 (Excluye las seleccionadas en Jornada 2)
+  // Preguntas visibles en Jornada 1
   const questionsForPart1 = useMemo(() => {
     return baseFilteredQuestions.filter((q) => !selectedQuestionsPart2.includes(q.id))
   }, [baseFilteredQuestions, selectedQuestionsPart2])
 
-  // Preguntas visibles en Jornada 2 (Excluye las seleccionadas en Jornada 1)
+  // Preguntas visibles en Jornada 2
   const questionsForPart2 = useMemo(() => {
     return baseFilteredQuestions.filter((q) => !selectedQuestionsPart1.includes(q.id))
   }, [baseFilteredQuestions, selectedQuestionsPart1])
@@ -194,6 +199,7 @@ export default function AdminSimulationsPage() {
     setIsActive(true)
     setDurationPart1(60)
     setDurationPart2(270)
+    setAllowedRoles(['simulacro_unico', 'preicfes_completo'])
     setSelectedQuestionsPart1([])
     setSelectedQuestionsPart2([])
   }
@@ -212,20 +218,6 @@ export default function AdminSimulationsPage() {
     }
   }
 
-  // Alternar modo tesoro / ranking
-  const toggleTreasureStatus = async (simId: string, currentStatus: boolean) => {
-    const { error } = await supabase
-      .from('simulations')
-      .update({ is_treasure_active: !currentStatus })
-      .eq('id', simId)
-
-    if (error) {
-      alert(`Error actualizando estado tesoro: ${error.message}`)
-    } else {
-      await loadData()
-    }
-  }
-
   // Crear o Editar Simulacro
   const handleSubmitSimulation = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -237,6 +229,9 @@ export default function AdminSimulationsPage() {
 
     setSubmitting(true)
 
+    // Filtrar estrictamente para enviar unicamente valores aceptados por el ENUM en Supabase
+    const finalAllowedRoles = allowedRoles.filter((role) => VALID_SUBSCRIPTIONS.includes(role))
+
     const payload = {
       title: title.trim(),
       description: description.trim() || null,
@@ -247,7 +242,7 @@ export default function AdminSimulationsPage() {
       is_active: isActive,
       duration_minutes_part1: durationPart1,
       duration_minutes_part2: type === 'normal_jornadas' ? durationPart2 : 0,
-      allowed_roles: allowedRoles,
+      allowed_roles: finalAllowedRoles,
       is_treasure_active: type === 'tesoro',
     }
 
@@ -322,7 +317,10 @@ export default function AdminSimulationsPage() {
     setIsActive(sim.is_active)
     setDurationPart1(sim.duration_minutes_part1)
     setDurationPart2(sim.duration_minutes_part2 || 270)
-    setAllowedRoles(sim.allowed_roles || ['simulacro_unico', 'preicfes_completo'])
+
+    // Filtramos explícitamente cualquier valor antiguo como 'admin' al cargar el simulacro a edición
+    const cleanRoles = (sim.allowed_roles || VALID_SUBSCRIPTIONS).filter((r) => VALID_SUBSCRIPTIONS.includes(r))
+    setAllowedRoles(cleanRoles)
 
     const part1 = sim.simulation_questions?.filter((sq) => sq.section_part === 1).map((sq) => sq.question_id) || []
     const part2 = sim.simulation_questions?.filter((sq) => sq.section_part === 2).map((sq) => sq.question_id) || []
@@ -754,9 +752,9 @@ export default function AdminSimulationsPage() {
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-orange-500 cursor-pointer"
                 >
                   <option value="">-- Todos los Tipos --</option>
-                  <option value="corto">Simulacro Corto</option>
+                  <option value="corto">Corto</option>
                   <option value="normal_jornadas">Normal (2 Jornadas)</option>
-                  <option value="tesoro">Tipo Tesoro</option>
+                  <option value="tesoro">Tesoro</option>
                 </select>
               </div>
 
@@ -795,113 +793,81 @@ export default function AdminSimulationsPage() {
               </div>
             </div>
 
-            {/* Tarjetas de Simulacros Creados */}
+            {/* Listado de Simulacros */}
             {filteredSimulations.length === 0 ? (
-              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 text-center text-slate-500 text-xs font-semibold">
-                No se encontraron simulacros registrados o con los filtros seleccionados.
+              <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-12 text-center space-y-2">
+                <p className="text-3xl">📭</p>
+                <p className="text-xs font-bold text-slate-300">No se encontraron simulacros con estos filtros.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {filteredSimulations.map((sim) => {
-                  const totalQuestions = sim.simulation_questions?.length || 0
+              <div className="grid grid-cols-1 gap-4">
+                {filteredSimulations.map((sim) => (
+                  <div
+                    key={sim.id}
+                    className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1 max-w-2xl">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                          sim.is_active ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border border-rose-500/30 text-rose-400'
+                        }`}>
+                          {sim.is_active ? '● Activo' : '○ Inactivo'}
+                        </span>
 
-                  return (
-                    <div
-                      key={sim.id}
-                      className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 shadow-xl backdrop-blur-xl flex flex-col justify-between space-y-4 hover:border-slate-700 transition-all"
-                    >
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span
-                            className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase ${
-                              sim.type === 'tesoro'
-                                ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                : sim.type === 'normal_jornadas'
-                                ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
-                                : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                            }`}
-                          >
-                            {sim.type === 'tesoro'
-                              ? '★ Tipo Tesoro'
-                              : sim.type === 'normal_jornadas'
-                              ? '2 Jornadas'
-                              : 'Corto (1 Sesión)'}
+                        <span className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-bold uppercase">
+                          {sim.type === 'normal_jornadas' ? '2 Jornadas' : sim.type === 'tesoro' ? 'Tesoro' : 'Corto'}
+                        </span>
+
+                        <span className="px-2 py-0.5 bg-orange-500/10 border border-orange-500/20 text-orange-400 rounded text-[10px] font-bold">
+                          Cal. {sim.calendar} - {sim.academic_year}
+                        </span>
+
+                        {sim.institutions?.name && (
+                          <span className="px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded text-[10px] font-bold">
+                            🏫 {sim.institutions.name}
                           </span>
-
-                          <div className="flex items-center gap-1.5">
-                            <span className="px-2 py-0.5 bg-slate-800 text-slate-300 text-[10px] font-bold rounded-md">
-                              Cal. {sim.calendar} - {sim.academic_year}
-                            </span>
-                          </div>
-                        </div>
-
-                        <h3 className="text-base font-bold text-white leading-snug">
-                          {sim.title}
-                        </h3>
-
-                        {sim.description && (
-                          <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">
-                            {sim.description}
-                          </p>
                         )}
-
-                        <div className="text-[11px] text-slate-400 space-y-1 pt-1">
-                          <p>
-                            🏫 <span className="font-semibold text-slate-300">{sim.institutions?.name || 'Todos los Colegios'}</span>
-                          </p>
-                          <p>
-                            ⏱ <span className="font-semibold text-slate-300">{sim.duration_minutes_part1 + (sim.duration_minutes_part2 || 0)} min total</span> ({totalQuestions} preguntas asociadas)
-                          </p>
-                        </div>
                       </div>
 
-                      {/* Botones de Control Rápido */}
-                      <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => toggleActiveStatus(sim.id, sim.is_active)}
-                            className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-all ${
-                              sim.is_active
-                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                                : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
-                            }`}
-                          >
-                            {sim.is_active ? '● Activo' : '○ Inactivo'}
-                          </button>
+                      <h3 className="text-sm font-bold text-white pt-1">{sim.title}</h3>
+                      {sim.description && <p className="text-xs text-slate-400">{sim.description}</p>}
 
-                          {sim.type === 'tesoro' && (
-                            <button
-                              onClick={() => toggleTreasureStatus(sim.id, sim.is_treasure_active)}
-                              className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-all ${
-                                sim.is_treasure_active
-                                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                                  : 'bg-slate-800 border-slate-700 text-slate-400'
-                              }`}
-                            >
-                              {sim.is_treasure_active ? '★ Ranking On' : '☆ Ranking Off'}
-                            </button>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleEdit(sim)}
-                            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 transition-all"
-                          >
-                            ✏️ Editar
-                          </button>
-                          <button
-                            onClick={() => handleDelete(sim.id)}
-                            className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-bold rounded-xl transition-all"
-                          >
-                            🗑️
-                          </button>
-                        </div>
+                      <div className="flex flex-wrap gap-2 pt-1 text-[11px] text-slate-400">
+                        <span>⏱ J1: {sim.duration_minutes_part1} min</span>
+                        {sim.type === 'normal_jornadas' && <span>| J2: {sim.duration_minutes_part2} min</span>}
+                        <span>| 🎯 {sim.simulation_questions?.length || 0} Preguntas</span>
                       </div>
-
                     </div>
-                  )
-                })}
+
+                    {/* Botones de Acción */}
+                    <div className="flex flex-wrap items-center gap-2 shrink-0 self-end md:self-center">
+                      <button
+                        onClick={() => toggleActiveStatus(sim.id, sim.is_active)}
+                        className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-colors border ${
+                          sim.is_active
+                            ? 'bg-rose-500/10 hover:bg-rose-500/20 border-rose-500/30 text-rose-400'
+                            : 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-400'
+                        }`}
+                      >
+                        {sim.is_active ? 'Desactivar' : 'Activar'}
+                      </button>
+
+                      <button
+                        onClick={() => handleEdit(sim)}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-400 font-bold text-xs rounded-xl transition-colors"
+                      >
+                        ✏️ Editar
+                      </button>
+
+                      <button
+                        onClick={() => handleDelete(sim.id)}
+                        className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 font-bold text-xs rounded-xl transition-colors"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 

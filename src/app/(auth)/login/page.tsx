@@ -8,8 +8,15 @@ import Link from 'next/link'
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false) // Estado para alternar ver/ocultar contraseña
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // Estados para el Modal de Recuperar Contraseña
+  const [isForgotModalOpen, setIsForgotModalOpen] = useState(false)
+  const [resetEmail, setResetEmail] = useState('')
+  const [resetLoading, setResetLoading] = useState(false)
+  const [resetMessage, setResetMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const supabase = createClient()
   const router = useRouter()
@@ -58,6 +65,29 @@ export default function LoginPage() {
         router.push('/dashboard')
       }
     }
+  }
+
+  // Manejador para el envío de recuperación de contraseña
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setResetLoading(true)
+    setResetMessage(null)
+
+    const { error } = await supabase.auth.resetPasswordForEmail(resetEmail.trim(), {
+      redirectTo: `${window.location.origin}/callback`,
+    })
+
+    if (error) {
+      setResetMessage({ type: 'error', text: `Error: ${error.message}` })
+    } else {
+      setResetMessage({
+        type: 'success',
+        text: '✅ Se ha enviado un enlace de recuperación a tu correo electrónico.',
+      })
+      setResetEmail('')
+    }
+
+    setResetLoading(false)
   }
 
   return (
@@ -109,17 +139,42 @@ export default function LoginPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-              Contraseña
-            </label>
-            <input
-              type="password"
-              required
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all"
-            />
+            <div className="flex justify-between items-center mb-1.5">
+              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                Contraseña
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  setResetEmail(email)
+                  setResetMessage(null)
+                  setIsForgotModalOpen(true)
+                }}
+                className="text-[11px] font-semibold text-orange-400 hover:text-orange-300 transition-colors"
+              >
+                ¿Olvidaste tu contraseña?
+              </button>
+            </div>
+
+            {/* Campo con botón para alternar ver/ocultar contraseña */}
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                required
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-4 pr-11 py-3 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors text-xs p-1"
+                title={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+              >
+                {showPassword ? '👁️' : '🙈'}
+              </button>
+            </div>
           </div>
 
           <button
@@ -156,6 +211,78 @@ export default function LoginPage() {
         </div>
 
       </div>
+
+      {/* Modal de Restablecer Contraseña */}
+      {isForgotModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-sm rounded-3xl p-6 shadow-2xl space-y-4 relative animate-in fade-in zoom-in duration-150">
+            
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                🔑 Restablecer Contraseña
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsForgotModalOpen(false)}
+                className="text-slate-400 hover:text-white text-xs font-bold p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              Ingresa tu correo registrado. Te enviaremos un enlace para crear una nueva clave.
+            </p>
+
+            <form onSubmit={handleResetPassword} className="space-y-3">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Correo Electrónico
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="tu.correo@ejemplo.com"
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              {resetMessage && (
+                <div
+                  className={`p-2.5 rounded-xl text-[11px] font-semibold text-center ${
+                    resetMessage.type === 'success'
+                      ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
+                      : 'bg-rose-500/10 border border-rose-500/30 text-rose-400'
+                  }`}
+                >
+                  {resetMessage.text}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsForgotModalOpen(false)}
+                  className="w-1/2 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={resetLoading}
+                  className="w-1/2 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 font-black text-xs uppercase text-slate-950 rounded-xl shadow-md shadow-orange-500/20 disabled:opacity-50 transition-all"
+                >
+                  {resetLoading ? 'Enviando...' : 'Enviar Enlace'}
+                </button>
+              </div>
+            </form>
+
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

@@ -39,7 +39,7 @@ export default function AdminQuestionsPage() {
   const [activeTab, setActiveTab] = useState<'create' | 'list'>('create')
 
   const [subjects, setSubjects] = useState<Subject[]>([])
-  const [selectedSubject, setSelectedSubject] = useState('')
+  const [selectedSubject, setSelectedSubject] = useState('all')
   const [newSubjectName, setNewSubjectName] = useState('')
 
   // Estado para preguntas cargadas
@@ -51,7 +51,7 @@ export default function AdminQuestionsPage() {
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
   const [statement, setStatement] = useState('')
   const [questionImageUrl, setQuestionImageUrl] = useState('')
-  const [explanation, setExplanation] = useState('') // 💡 Campo de Explicación Opcional
+  const [explanation, setExplanation] = useState('')
 
   // Control de subida de imágenes
   const [uploadingQuestionImg, setUploadingQuestionImg] = useState(false)
@@ -81,18 +81,15 @@ export default function AdminQuestionsPage() {
     const { data } = await supabase.from('subjects').select('*').order('name')
     if (data) {
       setSubjects(data)
-      if (data.length > 0) {
-        setSelectedSubject((prev) => (prev ? prev : data[0].id))
-      }
     }
     setLoadingSubjects(false)
   }, [supabase])
 
-  // Cargar Preguntas de la Materia Seleccionada
+  // Cargar Preguntas (Soporta 'all' o ID específico)
   const loadQuestionsBySubject = useCallback(async (subjectId: string) => {
-    if (!subjectId) return
     setLoadingQuestions(true)
-    const { data, error } = await supabase
+    
+    let query = supabase
       .from('questions')
       .select(`
         id,
@@ -109,11 +106,19 @@ export default function AdminQuestionsPage() {
           is_correct
         )
       `)
-      .eq('subject_id', subjectId)
       .order('created_at', { ascending: false })
+
+    if (subjectId && subjectId !== 'all') {
+      query = query.eq('subject_id', subjectId)
+    }
+
+    const { data, error } = await query
 
     if (!error && data) {
       setExistingQuestions(data as unknown as QuestionItem[])
+    } else {
+      console.error('Error cargando preguntas:', error)
+      setExistingQuestions([])
     }
     setLoadingQuestions(false)
   }, [supabase])
@@ -127,9 +132,7 @@ export default function AdminQuestionsPage() {
       const { data } = await supabase.from('subjects').select('*').order('name')
       if (isMounted && data) {
         setSubjects(data)
-        if (data.length > 0) {
-          setSelectedSubject((prev) => (prev ? prev : data[0].id))
-        }
+        setSelectedSubject('all')
         setLoadingSubjects(false)
       }
     }
@@ -139,48 +142,22 @@ export default function AdminQuestionsPage() {
     return () => { isMounted = false }
   }, [supabase])
 
-  // Reactividad cuando cambia la materia seleccionada
+  // Reactividad asíncrona corregida para evitar advertencias de cascading render
   useEffect(() => {
-    if (!selectedSubject) return
-
     let isMounted = true
 
     const fetchQuestions = async () => {
-      setLoadingQuestions(true)
-      const { data, error } = await supabase
-        .from('questions')
-        .select(`
-          id,
-          statement,
-          image_url,
-          explanation,
-          subject_id,
-          created_at,
-          options (
-            id,
-            option_letter,
-            option_text,
-            option_image_url,
-            is_correct
-          )
-        `)
-        .eq('subject_id', selectedSubject)
-        .order('created_at', { ascending: false })
-
       if (isMounted) {
-        if (!error && data) {
-          setExistingQuestions(data as unknown as QuestionItem[])
-        } else {
-          setExistingQuestions([])
-        }
-        setLoadingQuestions(false)
+        await loadQuestionsBySubject(selectedSubject)
       }
     }
 
     fetchQuestions()
 
-    return () => { isMounted = false }
-  }, [selectedSubject, supabase])
+    return () => {
+      isMounted = false
+    }
+  }, [selectedSubject, loadQuestionsBySubject])
 
   // Subir archivo a Supabase Storage
   const uploadImageToStorage = async (file: File): Promise<string | null> => {
@@ -260,6 +237,10 @@ export default function AdminQuestionsPage() {
     setQuestionImageUrl(question.image_url || '')
     setExplanation(question.explanation || '')
 
+    if (question.subject_id) {
+      setSelectedSubject(question.subject_id)
+    }
+
     if (question.options && question.options.length > 0) {
       const sortedOptions = [...question.options].sort((a, b) =>
         a.option_letter.localeCompare(b.option_letter)
@@ -304,7 +285,7 @@ export default function AdminQuestionsPage() {
       alert(`Error eliminando pregunta: ${error.message}`)
     } else {
       alert('Pregunta eliminada con éxito.')
-      if (selectedSubject) loadQuestionsBySubject(selectedSubject)
+      loadQuestionsBySubject(selectedSubject)
     }
   }
 
@@ -331,7 +312,7 @@ export default function AdminQuestionsPage() {
   // Eliminar materia con clave de admin
   const handleDeleteSubjectWithAuth = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!adminPassword || !selectedSubject) return
+    if (!adminPassword || !selectedSubject || selectedSubject === 'all') return
 
     setDeletingSubject(true)
 
@@ -364,7 +345,7 @@ export default function AdminQuestionsPage() {
       alert('Materia eliminada correctamente.')
       setShowDeleteModal(false)
       setAdminPassword('')
-      setSelectedSubject('')
+      setSelectedSubject('all')
       await loadSubjects()
     }
 
@@ -374,8 +355,8 @@ export default function AdminQuestionsPage() {
   // Guardar / Actualizar pregunta
   const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedSubject) {
-      alert('Por favor selecciona una materia.')
+    if (!selectedSubject || selectedSubject === 'all') {
+      alert('Por favor selecciona una materia específica para guardar la pregunta.')
       return
     }
     if (!statement.trim()) {
@@ -389,11 +370,10 @@ export default function AdminQuestionsPage() {
       subject_id: selectedSubject,
       statement: statement.trim(),
       image_url: questionImageUrl.trim() || null,
-      explanation: explanation.trim() || null, // 👈 Se guarda la explicación pedagógica
+      explanation: explanation.trim() || null,
     }
 
     if (editingQuestionId) {
-      // ACTUALIZAR PREGUNTA EXISTENTE
       const { error: qError } = await supabase
         .from('questions')
         .update(questionPayload)
@@ -425,7 +405,6 @@ export default function AdminQuestionsPage() {
         loadQuestionsBySubject(selectedSubject)
       }
     } else {
-      // CREAR NUEVA PREGUNTA
       const { data: questionData, error: qError } = await supabase
         .from('questions')
         .insert(questionPayload)
@@ -460,7 +439,6 @@ export default function AdminQuestionsPage() {
     setSubmitting(false)
   }
 
-  // Filtrado de preguntas en tiempo real
   const filteredQuestionsList = existingQuestions.filter((q) =>
     q.statement.toLowerCase().includes(searchQuery.toLowerCase())
   )
@@ -500,7 +478,7 @@ export default function AdminQuestionsPage() {
         {/* Sección 1: Materia o Área del Saber */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl backdrop-blur-xl space-y-4">
           <h2 className="text-base font-black text-white flex items-center gap-2">
-            <span>📚</span> 1. Materia o Área del Saber
+            <span>📚</span> Materia o Área del Saber
           </h2>
 
           {loadingSubjects ? (
@@ -520,6 +498,7 @@ export default function AdminQuestionsPage() {
                     }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-orange-500 cursor-pointer"
                   >
+                    <option value="all">🌐 Todas las materias ({existingQuestions.length} preguntas)</option>
                     {subjects.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
@@ -527,7 +506,7 @@ export default function AdminQuestionsPage() {
                     ))}
                   </select>
 
-                  {selectedSubject && (
+                  {selectedSubject && selectedSubject !== 'all' && (
                     <button
                       type="button"
                       onClick={() => setShowDeleteModal(true)}
@@ -620,7 +599,7 @@ export default function AdminQuestionsPage() {
                 />
               </div>
 
-              {/* Explicación / Retroalimentación Pedagógica Opcional */}
+              {/* Explicación Pedagógica Opcional */}
               <div>
                 <label className="block text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1 flex items-center gap-1">
                   <span>💡</span> Explicación / Retroalimentación Pedagógica (Opcional)
@@ -814,7 +793,7 @@ export default function AdminQuestionsPage() {
           </form>
         )}
 
-        {/* PESTAÑA 2: VISOR / LISTA DE PREGUNTAS */}
+        {/* PESTAÑA 2: VISOR / LISTA DE PREGUNTAS GUARDADAS */}
         {activeTab === 'list' && (
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl backdrop-blur-xl space-y-4">
             
@@ -827,124 +806,157 @@ export default function AdminQuestionsPage() {
                 className="w-full sm:max-w-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-orange-500"
               />
               <span className="text-xs font-bold text-slate-400">
-                Mostrando {filteredQuestionsList.length} de {existingQuestions.length} preguntas
+                Mostrando {filteredQuestionsList.length} de {existingQuestions.length}
               </span>
             </div>
 
             {loadingQuestions ? (
               <div className="text-center py-12 space-y-2">
-                <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto" />
-                <p className="text-xs text-slate-400 font-semibold">Cargando preguntas de la materia...</p>
+                <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto" />
+                <p className="text-xs text-slate-400 font-semibold">Cargando preguntas...</p>
               </div>
             ) : filteredQuestionsList.length === 0 ? (
-              <div className="p-8 text-center bg-slate-950 border border-slate-800 rounded-2xl space-y-2">
-                <p className="text-3xl">📭</p>
-                <p className="text-xs font-bold text-slate-300">No hay preguntas guardadas para esta materia aún.</p>
+              <div className="text-center py-12 space-y-2 border-2 border-dashed border-slate-800 rounded-2xl">
+                <p className="text-2xl">📭</p>
+                <p className="text-xs font-bold text-slate-300">No hay preguntas registradas con este filtro</p>
+                <p className="text-[11px] text-slate-500">Usa la pestaña Crear Pregunta o selecciona Todas las materias.</p>
               </div>
             ) : (
               <div className="space-y-4">
-                {filteredQuestionsList.map((q, index) => (
-                  <div
-                    key={q.id}
-                    className="p-5 bg-slate-950 border border-slate-800 rounded-2xl space-y-3 hover:border-slate-700 transition-all"
-                  >
-                    <div className="flex items-start justify-between gap-3">
+                {filteredQuestionsList.map((q, qIdx) => (
+                  <div key={q.id} className="p-5 bg-slate-950 border border-slate-800 rounded-2xl space-y-3">
+                    
+                    {/* Encabezado de Pregunta */}
+                    <div className="flex items-start justify-between gap-4">
                       <div className="space-y-1">
-                        <span className="px-2 py-0.5 bg-orange-500/10 border border-orange-500/20 text-orange-400 font-bold text-[10px] rounded-md uppercase">
-                          Pregunta #{index + 1}
-                        </span>
-                        <p className="text-xs font-bold text-white leading-relaxed">{q.statement}</p>
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 bg-orange-500/10 text-orange-400 border border-orange-500/20 rounded text-[10px] font-black">
+                            Pregunta #{filteredQuestionsList.length - qIdx}
+                          </span>
+                          {q.subject_id && (
+                            <span className="px-2 py-0.5 bg-slate-800 text-slate-400 rounded text-[10px] font-bold">
+                              {subjects.find((s) => s.id === q.subject_id)?.name || 'Materia'}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-medium text-slate-100 leading-relaxed pt-1">
+                          {q.statement}
+                        </p>
                       </div>
 
+                      {/* Botones de Acción */}
                       <div className="flex items-center gap-2 shrink-0">
                         <button
                           onClick={() => handleEditQuestion(q)}
-                          className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 font-bold text-xs rounded-xl border border-amber-500/30 transition-all"
+                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold text-[11px] rounded-lg transition-colors border border-slate-700"
+                          title="Editar pregunta"
                         >
                           ✏️ Editar
                         </button>
                         <button
                           onClick={() => handleDeleteQuestion(q.id)}
-                          className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-bold text-xs rounded-xl border border-rose-500/30 transition-all"
+                          className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-bold text-[11px] rounded-lg transition-colors border border-rose-500/20"
+                          title="Eliminar pregunta"
                         >
-                          🗑️ Eliminar
+                          🗑️
                         </button>
                       </div>
                     </div>
 
-                    {/* Explicación guardada */}
-                    {q.explanation && (
-                      <div className="p-3 bg-indigo-950/30 border border-indigo-500/30 rounded-xl space-y-1">
-                        <p className="text-[10px] font-bold text-indigo-400 uppercase flex items-center gap-1">
-                          <span>💡</span> Explicación Pedagógica:
-                        </p>
-                        <p className="text-xs text-slate-300 leading-relaxed">{q.explanation}</p>
+                    {/* Imagen del Enunciado si tiene */}
+                    {q.image_url && (
+                      <div className="pt-1">
+                        <img src={q.image_url} alt="Enunciado" className="max-h-48 rounded-lg border border-slate-800" />
                       </div>
                     )}
 
-                    {/* Opciones */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-900">
-                      {q.options?.sort((a, b) => a.option_letter.localeCompare(b.option_letter)).map((opt) => (
-                        <div
-                          key={opt.id}
-                          className={`p-2.5 rounded-xl border text-xs flex items-center justify-between ${
-                            opt.is_correct
-                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 font-bold'
-                              : 'bg-slate-900 border-slate-800 text-slate-400'
-                          }`}
-                        >
-                          <span>
-                            <strong className="mr-1.5 uppercase">{opt.option_letter}.</strong>
-                            {opt.option_text || 'Opción con imagen'}
-                          </span>
-                          {opt.is_correct && <span className="text-[10px] text-emerald-400">✓ Correcta</span>}
-                        </div>
-                      ))}
-                    </div>
+                    {/* Explicación Pedagógica si tiene */}
+                    {q.explanation && (
+                      <div className="p-3 bg-indigo-950/30 border border-indigo-500/20 rounded-xl space-y-1">
+                        <span className="text-[10px] font-black uppercase text-indigo-400 flex items-center gap-1">
+                          💡 Retroalimentación Pedagógica
+                        </span>
+                        <p className="text-[11px] text-slate-300">{q.explanation}</p>
+                      </div>
+                    )}
+
+                    {/* Opciones de la Pregunta */}
+                    {q.options && q.options.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-900">
+                        {[...q.options]
+                          .sort((a, b) => a.option_letter.localeCompare(b.option_letter))
+                          .map((opt) => (
+                            <div
+                              key={opt.id}
+                              className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+                                opt.is_correct
+                                  ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300 font-bold'
+                                  : 'bg-slate-900 border-slate-800/80 text-slate-400'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
+                                  opt.is_correct ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-300'
+                                }`}>
+                                  {opt.option_letter}
+                                </span>
+                                <span>{opt.option_text || '(Sin texto)'}</span>
+                              </div>
+                              {opt.is_correct && <span className="text-[10px] text-emerald-400">✓ Correcta</span>}
+                            </div>
+                          ))}
+                      </div>
+                    )}
+
                   </div>
                 ))}
               </div>
             )}
+
           </div>
         )}
 
       </div>
 
-      {/* Modal para eliminar materia */}
+      {/* Modal Confirmación Borrar Materia */}
       {showDeleteModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
-            <h3 className="text-sm font-black text-white">⚠️ Confirmar Eliminación de Materia</h3>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Ingresa tu contraseña de administrador para confirmar la eliminación permanente de esta materia y sus preguntas vinculadas.
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-sm rounded-3xl p-6 shadow-2xl space-y-4">
+            <h3 className="text-sm font-black text-rose-400 flex items-center gap-2">
+              ⚠️ Eliminar Materia
+            </h3>
+            <p className="text-xs text-slate-300">
+              Ingresa tu contraseña de administrador para confirmar la eliminación de esta materia.
             </p>
-            <input
-              type="password"
-              placeholder="Contraseña del administrador..."
-              value={adminPassword}
-              onChange={(e) => setAdminPassword(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-rose-500"
-            />
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowDeleteModal(false)
-                  setAdminPassword('')
-                }}
-                className="px-4 py-2 bg-slate-800 text-slate-300 font-bold text-xs rounded-xl hover:bg-slate-700"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleDeleteSubjectWithAuth}
-                disabled={deletingSubject || !adminPassword}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl disabled:opacity-40"
-              >
-                {deletingSubject ? 'Eliminando...' : 'Confirmar Eliminación'}
-              </button>
-            </div>
+            <form onSubmit={handleDeleteSubjectWithAuth} className="space-y-3">
+              <input
+                type="password"
+                required
+                placeholder="Contraseña del administrador"
+                value={adminPassword}
+                onChange={(e) => setAdminPassword(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-rose-500"
+              />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDeleteModal(false)
+                    setAdminPassword('')
+                  }}
+                  className="w-1/2 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={deletingSubject}
+                  className="w-1/2 py-2 bg-rose-500 hover:bg-rose-600 font-bold text-xs rounded-xl text-white disabled:opacity-50"
+                >
+                  {deletingSubject ? 'Eliminando...' : 'Confirmar'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -7,10 +7,13 @@ import Link from 'next/link'
 interface Profile {
   id: string
   full_name: string
-  subscription_type: 'simulacro_unico' | 'preicfes_completo'
+  subscription_type: string | null
+  status: 'pending' | 'approved' | 'rejected'
   calendar: string | null
   institution_id: string | null
   academic_year: number | null
+  access_start_date: string | null
+  access_end_date: string | null
 }
 
 interface ActiveSimulation {
@@ -48,6 +51,7 @@ export default function StudentDashboardPage() {
   const [recentAttempts, setRecentAttempts] = useState<RecentAttempt[]>([])
   const [subjectStats, setSubjectStats] = useState<SubjectStat[]>([])
   const [loading, setLoading] = useState<boolean>(true)
+  const [accessExpired, setAccessExpired] = useState<boolean>(false)
 
   const supabase = createClient()
 
@@ -63,10 +67,10 @@ export default function StudentDashboardPage() {
         return
       }
 
-      // 1. Obtener perfil del estudiante
+      // 1. Obtener perfil completo según el esquema real de public.profiles
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('id, full_name, subscription_type, calendar, institution_id, academic_year')
+        .select('id, full_name, subscription_type, status, calendar, institution_id, access_start_date, access_end_date')
         .eq('id', user.id)
         .single()
 
@@ -74,9 +78,26 @@ export default function StudentDashboardPage() {
 
       if (studentProfile && isMounted) {
         setProfile(studentProfile)
+
+        // Verificar vencimiento de fechas de acceso si están definidas
+        if (studentProfile.access_end_date) {
+          const endDate = new Date(studentProfile.access_end_date)
+          if (endDate < new Date()) {
+            setAccessExpired(true)
+          }
+        }
       }
 
-      // 2. Obtener simulacros activos
+      // Validar si el usuario NO está aprobado o su acceso expiró
+      if (!studentProfile || studentProfile.status !== 'approved' || accessExpired) {
+        if (isMounted) {
+          setSimulations([])
+          setLoading(false)
+        }
+        return
+      }
+
+      // 2. Obtener simulacros activos según el esquema public.simulations
       const { data: simData } = await supabase
         .from('simulations')
         .select('id, title, description, type, duration_minutes_part1, duration_minutes_part2, is_treasure_active, calendar, academic_year, target_institution_id, allowed_roles')
@@ -85,20 +106,31 @@ export default function StudentDashboardPage() {
 
       if (simData && isMounted) {
         const validSims = simData.filter((sim) => {
-          if (sim.target_institution_id && sim.target_institution_id !== studentProfile?.institution_id) {
-            return false
-          }
-          if (sim.allowed_roles && Array.isArray(sim.allowed_roles) && studentProfile?.subscription_type) {
-            if (!sim.allowed_roles.includes(studentProfile.subscription_type)) {
+          // A. Filtrado por Colegio / Institución Target
+          if (sim.target_institution_id) {
+            // Si el simulacro requiere una institución específica y el alumno no la tiene o no coincide -> Ocultar
+            if (!studentProfile.institution_id || sim.target_institution_id !== studentProfile.institution_id) {
               return false
             }
           }
+
+          // B. Filtrado por Permisos de Suscripción (allowed_roles)
+          if (sim.allowed_roles && Array.isArray(sim.allowed_roles) && sim.allowed_roles.length > 0) {
+            const userSub = studentProfile.subscription_type
+
+            // Si el simulacro limita roles y el usuario no tiene rol o no está en la lista -> Ocultar
+            if (!userSub || !sim.allowed_roles.includes(userSub)) {
+              return false
+            }
+          }
+
           return true
         })
+
         setSimulations(validSims as ActiveSimulation[])
       }
 
-      // 3. Obtener histórico de intentos recientes
+      // 3. Obtener histórico de intentos recientes según public.student_attempts
       const { data: attemptsData } = await supabase
         .from('student_attempts')
         .select(`
@@ -116,7 +148,7 @@ export default function StudentDashboardPage() {
         setRecentAttempts(attemptsData as unknown as RecentAttempt[])
       }
 
-      // 4. Cargar respuestas e indicadores por materia de forma segura
+      // 4. Cargar respuestas e indicadores por materia según public.attempt_answers y public.questions
       const { data: userAttempts } = await supabase
         .from('student_attempts')
         .select('id')
@@ -186,7 +218,7 @@ export default function StudentDashboardPage() {
     return () => {
       isMounted = false
     }
-  }, [supabase])
+  }, [supabase, accessExpired])
 
   if (loading) {
     return (
@@ -218,7 +250,7 @@ export default function StudentDashboardPage() {
               </span>
               {profile?.calendar && (
                 <span className="px-2.5 py-1 bg-slate-800 text-slate-300 text-[10px] font-bold uppercase rounded-lg">
-                  Cal. {profile.calendar} {profile.academic_year ? `- Cohorte ${profile.academic_year}` : ''}
+                  Cal. {profile.calendar}
                 </span>
               )}
             </div>
@@ -342,9 +374,27 @@ export default function StudentDashboardPage() {
             </div>
           </div>
 
-          {simulations.length === 0 ? (
+          {profile?.status === 'rejected' ? (
+            <div className="bg-rose-500/10 border border-rose-500/30 p-8 rounded-3xl text-center text-rose-400 text-xs font-bold space-y-2">
+              <p className="text-2xl">🚫</p>
+              <p className="text-sm font-black">Tu cuenta ha sido rechazada por la administración.</p>
+              <p className="text-[11px] text-slate-400 font-medium">No tienes acceso a los simulacros ni evaluaciones del sistema.</p>
+            </div>
+          ) : accessExpired ? (
+            <div className="bg-rose-500/10 border border-rose-500/30 p-8 rounded-3xl text-center text-rose-400 text-xs font-bold space-y-2">
+              <p className="text-2xl">⌛</p>
+              <p className="text-sm font-black">Tu período de suscripción ha expirado.</p>
+              <p className="text-[11px] text-slate-400 font-medium">Contacta al administrador para renovar tu membresía.</p>
+            </div>
+          ) : profile?.status === 'pending' ? (
+            <div className="bg-amber-500/10 border border-amber-500/30 p-8 rounded-3xl text-center text-amber-400 text-xs font-bold space-y-2">
+              <p className="text-2xl">⏳</p>
+              <p className="text-sm font-black">Tu solicitud está pendiente de aprobación.</p>
+              <p className="text-[11px] text-slate-400 font-medium">Un administrador revisará tu cuenta pronto para habilitar el acceso a los simulacros.</p>
+            </div>
+          ) : simulations.length === 0 ? (
             <div className="bg-slate-900/90 border border-slate-800 p-8 rounded-3xl text-center text-slate-500 text-xs font-semibold">
-              No tienes simulacros activos asignados en este momento.
+              No tienes simulacros activos asignados a tu perfil en este momento.
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

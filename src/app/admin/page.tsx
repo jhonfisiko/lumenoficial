@@ -60,7 +60,7 @@ export default function AdminDashboardPage() {
           return
         }
 
-        // Consultar conteos de todos los módulos del admin de forma segura
+        // Consultar conteos de todos los módulos del admin de forma paralela y segura
         const [
           { count: studentsCount },
           { count: pendingCount, data: pendingData },
@@ -105,7 +105,10 @@ export default function AdminDashboardPage() {
   const handleApproveUser = async (userId: string) => {
     const { error } = await supabase
       .from('profiles')
-      .update({ status: 'approved' })
+      .update({ 
+        status: 'approved',
+        subscription_type: 'preicfes_completo' // Asigna suscripción inicial por defecto al aprobar
+      })
       .eq('id', userId)
 
     if (!error) {
@@ -113,7 +116,10 @@ export default function AdminDashboardPage() {
       setStats((prev) => ({
         ...prev,
         pendingApprovals: Math.max(0, prev.pendingApprovals - 1),
+        totalStudents: prev.totalStudents + 1,
       }))
+    } else {
+      alert(`Error al aprobar usuario: ${error.message}`)
     }
   }
 
@@ -203,7 +209,7 @@ export default function AdminDashboardPage() {
         {/* Módulos del Administrador y Lista de Pendientes */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* Accesos Rápidos a Todos los Módulos de la Estructura */}
+          {/* Accesos Rápidos */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 space-y-4">
             <h2 className="text-lg font-black text-white flex items-center gap-2">
               <span>⚡</span> Módulos del Sistema
