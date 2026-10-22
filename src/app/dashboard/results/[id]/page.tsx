@@ -1,3 +1,4 @@
+// RUTA: app/dashboard/results/[id]/page.tsx   (pantalla de resultados del estudiante)
 'use client'
 
 import { useState, useEffect, useMemo, use } from 'react'
@@ -36,6 +37,12 @@ interface AttemptAnswer {
   is_correct: boolean
   questions: QuestionDetail
 }
+
+// Separa visualmente las explicaciones viejas que quedaron en un solo párrafo
+// ("Descarte: A. ❌ ... B. ❌ ... D. ✅") sin tocar la base de datos.
+// Las explicaciones nuevas con Enter se respetan gracias a whitespace-pre-line.
+const formatExplanation = (text: string) =>
+  text.replace(/\s+(?=Descarte:|[A-E]\.\s*(?:❌|✅))/g, '\n\n')
 
 // Configuración base de materias según parámetros ICFES
 const SUBJECT_CONFIG: Record<string, { weight: number; color: string; emoji: string; key: string }> = {
@@ -465,7 +472,7 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
                   <span className={`px-3 py-1 rounded-lg text-xs font-black uppercase ${activeReviewItem.is_correct ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>{activeReviewItem.is_correct ? '✓ Correcta' : '✕ Incorrecta'}</span>
                 </div>
 
-                <p className="text-base font-semibold text-white leading-relaxed">{activeReviewItem.questions.statement}</p>
+                <p className="text-base font-semibold text-white leading-relaxed whitespace-pre-line">{activeReviewItem.questions.statement}</p>
 
                 {activeReviewItem.questions.image_url && (
                   <div className="max-w-md mx-auto p-2 bg-slate-950 border border-slate-800 rounded-2xl">
@@ -484,7 +491,7 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
                     return (
                       <div key={opt.id} className={`p-4 rounded-2xl border text-xs md:text-sm flex items-start space-x-3 ${styleClass}`}>
                         <span className={`font-black w-6 h-6 rounded-lg flex items-center justify-center text-xs uppercase shrink-0 ${isTheCorrectOption ? 'bg-emerald-500 text-slate-950' : isSelected ? 'bg-rose-500 text-white' : 'bg-slate-800 text-slate-300'}`}>{opt.option_letter}</span>
-                        <div className="flex-1 pt-0.5">{opt.option_text}</div>
+                        <div className="flex-1 pt-0.5 whitespace-pre-line">{opt.option_text}</div>
                         {isSelected && <span className="text-[10px] font-black uppercase text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20 shrink-0">Tu Respuesta</span>}
                       </div>
                     )
@@ -497,8 +504,8 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
                     <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase">
                       <span>💡</span> Explicación / Retroalimentación:
                     </div>
-                    <p className="text-xs text-slate-300 leading-relaxed">
-                      {activeReviewItem.questions.explanation}
+                    <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-line">
+                      {formatExplanation(activeReviewItem.questions.explanation)}
                     </p>
                   </div>
                 )}
@@ -530,7 +537,7 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
                     <span className={`px-3 py-1 rounded-lg text-xs font-black uppercase ${isCorrect ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>{isCorrect ? '✓ Correcta' : '✕ Incorrecta'}</span>
                   </div>
 
-                  <p className="text-slate-100 text-sm font-semibold">{question?.statement}</p>
+                  <p className="text-slate-100 text-sm font-semibold whitespace-pre-line">{question?.statement}</p>
 
                   <div className="space-y-2 pt-2">
                     {question?.options?.sort((a, b) => a.option_letter.localeCompare(b.option_letter)).map((opt) => {
@@ -543,7 +550,7 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
                       return (
                         <div key={opt.id} className={`p-3 rounded-2xl border text-xs md:text-sm flex items-start space-x-3 ${styleClass}`}>
                           <span className={`font-black w-6 h-6 rounded-lg flex items-center justify-center text-xs uppercase ${isTheCorrectOption ? 'bg-emerald-500 text-slate-950' : isSelected ? 'bg-rose-500 text-white' : 'bg-slate-800 text-slate-300'}`}>{opt.option_letter}</span>
-                          <div className="flex-1 pt-0.5">{opt.option_text}</div>
+                          <div className="flex-1 pt-0.5 whitespace-pre-line">{opt.option_text}</div>
                           {isSelected && <span className="text-[10px] font-black uppercase text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20 shrink-0">Tu respuesta</span>}
                         </div>
                       )
@@ -555,8 +562,8 @@ export default function StudentResultPage({ params }: { params: Promise<{ id: st
                       <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs uppercase">
                         <span>💡</span> Explicación / Retroalimentación:
                       </div>
-                      <p className="text-xs text-slate-300 leading-relaxed">
-                        {question.explanation}
+                      <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-line">
+                        {formatExplanation(question.explanation)}
                       </p>
                     </div>
                   )}

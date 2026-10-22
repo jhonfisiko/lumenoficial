@@ -1,3 +1,4 @@
+// RUTA: app/admin/questions/page.tsx   (banco de preguntas del administrador)
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
@@ -24,6 +25,7 @@ interface QuestionItem {
   explanation: string | null
   subject_id: string
   created_at: string
+  upload_position: number | null
   options: {
     id: string
     option_letter: string
@@ -46,6 +48,7 @@ export default function AdminQuestionsPage() {
   const [existingQuestions, setExistingQuestions] = useState<QuestionItem[]>([])
   const [loadingQuestions, setLoadingQuestions] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest')
 
   // Estado del formulario de preguntas (Crear / Editar)
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
@@ -85,7 +88,7 @@ export default function AdminQuestionsPage() {
     setLoadingSubjects(false)
   }, [supabase])
 
-  // Cargar Preguntas (Soporta 'all' o ID específico)
+  // Cargar Preguntas (Soporta 'all' o ID específico). Orden base: orden de subida.
   const loadQuestionsBySubject = useCallback(async (subjectId: string) => {
     setLoadingQuestions(true)
     
@@ -98,6 +101,7 @@ export default function AdminQuestionsPage() {
         explanation,
         subject_id,
         created_at,
+        upload_position,
         options (
           id,
           option_letter,
@@ -106,6 +110,7 @@ export default function AdminQuestionsPage() {
           is_correct
         )
       `)
+      .order('upload_position', { ascending: false, nullsFirst: true })
       .order('created_at', { ascending: false })
 
     if (subjectId && subjectId !== 'all') {
@@ -282,7 +287,9 @@ export default function AdminQuestionsPage() {
     const { error } = await supabase.from('questions').delete().eq('id', questionId)
 
     if (error) {
-      alert(`Error eliminando pregunta: ${error.message}`)
+      alert(
+        `No se pudo eliminar la pregunta: ${error.message}\n\nSi la pregunta está dentro de un simulacro o ya fue respondida por estudiantes, no se puede borrar.`
+      )
     } else {
       alert('Pregunta eliminada con éxito.')
       loadQuestionsBySubject(selectedSubject)
@@ -366,6 +373,7 @@ export default function AdminQuestionsPage() {
 
     setSubmitting(true)
 
+    // OJO: se respetan los saltos de línea (no se hace trim interno, solo en los extremos)
     const questionPayload = {
       subject_id: selectedSubject,
       statement: statement.trim(),
@@ -385,26 +393,66 @@ export default function AdminQuestionsPage() {
         return
       }
 
-      await supabase.from('options').delete().eq('question_id', editingQuestionId)
+      // EDICIÓN SEGURA DE OPCIONES:
+      // Ya no se borran y recrean todas (eso rompía las respuestas de estudiantes
+      // que apuntan a esas opciones). Se actualizan las existentes por id,
+      // se insertan las nuevas y solo se borran las que el admin quitó.
+      const originalQuestion = existingQuestions.find((q) => q.id === editingQuestionId)
+      const originalIds = originalQuestion?.options.map((o) => o.id) ?? []
+      const keptIds = options.filter((o) => o.id).map((o) => o.id as string)
+      const idsToDelete = originalIds.filter((id) => !keptIds.includes(id))
 
-      const optionsPayload = options.map((opt) => ({
-        question_id: editingQuestionId,
-        option_letter: opt.letter,
-        option_text: opt.text.trim() || null,
-        option_image_url: opt.imageUrl.trim() || null,
-        is_correct: opt.isCorrect,
-      }))
+      let optionsError: string | null = null
 
-      const { error: optError } = await supabase.from('options').insert(optionsPayload)
+      if (idsToDelete.length > 0) {
+        const { error: delErr } = await supabase.from('options').delete().in('id', idsToDelete)
+        if (delErr) {
+          optionsError =
+            'No se pudieron quitar algunas opciones porque ya fueron respondidas por estudiantes. Se dejaron como estaban.'
+        }
+      }
 
-      if (optError) {
-        alert(`Error al actualizar las opciones: ${optError.message}`)
+      for (const opt of options.filter((o) => o.id)) {
+        const { error: updErr } = await supabase
+          .from('options')
+          .update({
+            option_letter: opt.letter,
+            option_text: opt.text.trim() || null,
+            option_image_url: opt.imageUrl.trim() || null,
+            is_correct: opt.isCorrect,
+          })
+          .eq('id', opt.id as string)
+
+        if (updErr) {
+          optionsError = `Error al actualizar la opción ${opt.letter}: ${updErr.message}`
+          break
+        }
+      }
+
+      const newOptions = options
+        .filter((o) => !o.id)
+        .map((opt) => ({
+          question_id: editingQuestionId,
+          option_letter: opt.letter,
+          option_text: opt.text.trim() || null,
+          option_image_url: opt.imageUrl.trim() || null,
+          is_correct: opt.isCorrect,
+        }))
+
+      if (!optionsError && newOptions.length > 0) {
+        const { error: insErr } = await supabase.from('options').insert(newOptions)
+        if (insErr) optionsError = `Error al agregar opciones nuevas: ${insErr.message}`
+      }
+
+      if (optionsError) {
+        alert(optionsError)
       } else {
         alert('¡Pregunta actualizada con éxito!')
-        resetForm()
-        loadQuestionsBySubject(selectedSubject)
       }
+      resetForm()
+      loadQuestionsBySubject(selectedSubject)
     } else {
+      // El número de orden de subida (upload_position) lo asigna la base de datos solo
       const { data: questionData, error: qError } = await supabase
         .from('questions')
         .insert(questionPayload)
@@ -439,9 +487,20 @@ export default function AdminQuestionsPage() {
     setSubmitting(false)
   }
 
-  const filteredQuestionsList = existingQuestions.filter((q) =>
-    q.statement.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  // Filtro por texto (o por número de pregunta, ej: "25" o "#25") + orden de subida
+  const filteredQuestionsList = existingQuestions
+    .filter((q) => {
+      const term = searchQuery.trim().toLowerCase()
+      if (!term) return true
+      const numeric = term.replace('#', '')
+      if (/^\d+$/.test(numeric) && q.upload_position === Number(numeric)) return true
+      return q.statement.toLowerCase().includes(term)
+    })
+    .sort((a, b) => {
+      const pa = a.upload_position ?? 0
+      const pb = b.upload_position ?? 0
+      return sortOrder === 'newest' ? pb - pa : pa - pb
+    })
 
   return (
     <div className="relative min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 selection:bg-orange-500 selection:text-white font-sans">
@@ -605,8 +664,8 @@ export default function AdminQuestionsPage() {
                   <span>💡</span> Explicación / Retroalimentación Pedagógica (Opcional)
                 </label>
                 <textarea
-                  rows={3}
-                  placeholder="Justifica por qué la opción correcta es la acertada. Este texto se mostrará en la revisión del estudiante..."
+                  rows={6}
+                  placeholder="Justifica por qué la opción correcta es la acertada. Usa Enter para separar párrafos: se verán igual en la revisión del estudiante..."
                   value={explanation}
                   onChange={(e) => setExplanation(e.target.value)}
                   className="w-full bg-indigo-950/20 border border-indigo-500/30 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500"
@@ -797,14 +856,24 @@ export default function AdminQuestionsPage() {
         {activeTab === 'list' && (
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 shadow-xl backdrop-blur-xl space-y-4">
             
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
-              <input
-                type="text"
-                placeholder="🔍 Buscar pregunta por texto..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full sm:max-w-xs bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-orange-500"
-              />
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-4 border-b border-slate-800">
+              <div className="flex flex-col sm:flex-row gap-2 w-full lg:max-w-xl">
+                <input
+                  type="text"
+                  placeholder="🔍 Buscar por texto o por número (ej: 25)..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-orange-500"
+                />
+                <select
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(e.target.value as 'newest' | 'oldest')}
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-orange-500 cursor-pointer shrink-0"
+                >
+                  <option value="newest">↓ Más recientes primero</option>
+                  <option value="oldest">↑ Más antiguas primero</option>
+                </select>
+              </div>
               <span className="text-xs font-bold text-slate-400">
                 Mostrando {filteredQuestionsList.length} de {existingQuestions.length}
               </span>
@@ -823,23 +892,27 @@ export default function AdminQuestionsPage() {
               </div>
             ) : (
               <div className="space-y-4">
-                {filteredQuestionsList.map((q, qIdx) => (
+                {filteredQuestionsList.map((q) => (
                   <div key={q.id} className="p-5 bg-slate-950 border border-slate-800 rounded-2xl space-y-3">
                     
                     {/* Encabezado de Pregunta */}
                     <div className="flex items-start justify-between gap-4">
                       <div className="space-y-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* Número fijo: no cambia con filtros ni búsquedas */}
                           <span className="px-2 py-0.5 bg-orange-500/10 text-orange-400 border border-orange-500/20 rounded text-[10px] font-black">
-                            Pregunta #{filteredQuestionsList.length - qIdx}
+                            Pregunta #{q.upload_position ?? '—'}
                           </span>
                           {q.subject_id && (
                             <span className="px-2 py-0.5 bg-slate-800 text-slate-400 rounded text-[10px] font-bold">
                               {subjects.find((s) => s.id === q.subject_id)?.name || 'Materia'}
                             </span>
                           )}
+                          <span className="px-2 py-0.5 bg-slate-900 text-slate-500 rounded text-[10px] font-semibold">
+                            📅 {new Date(q.created_at).toLocaleDateString('es-CO')}
+                          </span>
                         </div>
-                        <p className="text-xs font-medium text-slate-100 leading-relaxed pt-1">
+                        <p className="text-xs font-medium text-slate-100 leading-relaxed pt-1 whitespace-pre-line">
                           {q.statement}
                         </p>
                       </div>
@@ -876,7 +949,7 @@ export default function AdminQuestionsPage() {
                         <span className="text-[10px] font-black uppercase text-indigo-400 flex items-center gap-1">
                           💡 Retroalimentación Pedagógica
                         </span>
-                        <p className="text-[11px] text-slate-300">{q.explanation}</p>
+                        <p className="text-[11px] text-slate-300 whitespace-pre-line">{q.explanation}</p>
                       </div>
                     )}
 

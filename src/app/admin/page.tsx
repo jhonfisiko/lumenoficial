@@ -279,7 +279,18 @@ export default function AdminDashboardPage() {
                 </div>
                 <span className="text-slate-500 group-hover:translate-x-1 transition-transform">➔</span>
               </Link>
-
+              <Link
+  href="/admin/results"
+  className="flex items-center justify-between p-3.5 bg-slate-950 hover:bg-slate-800/80 border border-slate-800 rounded-2xl transition-all group"
+>
+  <div>
+    <p className="text-xs font-bold text-white group-hover:text-orange-400 transition-colors">
+      📊 Resultados y Estadísticas (`/admin/results`)
+    </p>
+    <p className="text-[11px] text-slate-400">Ver cómo quedaron los estudiantes y administrar rankings</p>
+  </div>
+  <span className="text-slate-500 group-hover:translate-x-1 transition-transform">➔</span>
+</Link>
               <Link
                 href="/dashboard"
                 className="flex items-center justify-between p-3.5 bg-slate-950 hover:bg-slate-800/80 border border-slate-800 rounded-2xl transition-all group"

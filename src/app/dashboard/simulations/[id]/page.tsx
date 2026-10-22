@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, use } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, use } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 
@@ -9,7 +9,6 @@ interface Option {
   option_letter: string
   option_text: string | null
   option_image_url: string | null
-  is_correct: boolean
 }
 
 interface Question {
@@ -20,9 +19,9 @@ interface Question {
 }
 
 interface SimulationQuestion {
-  section_part: number
-  question_order: number
-  questions: Question
+  section_part: number | null
+  question_order: number | null
+  questions: Question | null
 }
 
 interface SimulationData {
@@ -30,35 +29,74 @@ interface SimulationData {
   title: string
   type: 'corto' | 'normal_jornadas' | 'tesoro'
   duration_minutes_part1: number
-  duration_minutes_part2: number
+  duration_minutes_part2: number | null
+}
+
+interface AttemptState {
+  attempt_id: string
+  current_section: number
+  section_started_at: string
+  server_now: string
+  answers?: Record<string, string>
+}
+
+interface FinishResult {
+  attempt_id: string
+  score: number
+  correct: number
+  total: number
+}
+
+type SaveStatus = 'saved' | 'saving' | 'error'
+
+// Convierte la hora límite del servidor a hora del reloj local (evita trampas con la hora del dispositivo)
+const computeDeadline = (startedAt: string, serverNow: string, minutes: number) => {
+  const offset = Date.parse(serverNow) - Date.now()
+  return Date.parse(startedAt) + minutes * 60000 - offset
+}
+
+const secondsUntil = (deadline: number) => Math.max(0, Math.round((deadline - Date.now()) / 1000))
+
+const friendlyError = (message: string | undefined) => {
+  if (!message) return 'Ocurrió un error inesperado.'
+  if (message.includes('FALTAN')) return 'Aún tienes preguntas sin responder en esta sección.'
+  return message
 }
 
 export default function StudentSimulationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: simulationId } = use(params)
-  
+
   const [simulation, setSimulation] = useState<SimulationData | null>(null)
+  const [attemptId, setAttemptId] = useState<string | null>(null)
   const [currentPart, setCurrentPart] = useState<number>(1)
-  const [questions, setQuestions] = useState<Question[]>([])
+  const [sections, setSections] = useState<Record<number, Question[]>>({ 1: [], 2: [] })
   const [currentIndex, setCurrentIndex] = useState<number>(0)
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string>>({})
-  
-  // Control de estado del examen
-  const [timeLeft, setTimeLeft] = useState<number>(0) // segundos
-  const [isOnBreak, setIsOnBreak] = useState<boolean>(false)
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+
+  const [deadline, setDeadline] = useState<number | null>(null)
+  const [timeLeft, setTimeLeft] = useState<number>(0)
+  const [section1Done, setSection1Done] = useState<boolean>(false)
   const [loading, setLoading] = useState<boolean>(true)
   const [submitting, setSubmitting] = useState<boolean>(false)
+  const [advancing, setAdvancing] = useState<boolean>(false)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved')
+  const [retryTick, setRetryTick] = useState<number>(0)
 
-  const supabase = createClient()
+  const unsavedRef = useRef<Map<string, string>>(new Map())
+  const submittingRef = useRef<boolean>(false)
+  const autoFinishRef = useRef<boolean>(false)
+
+  const supabase = useMemo(() => createClient(), [])
   const router = useRouter()
 
+  // ---------- Carga inicial: simulacro, intento (nuevo o retomado) y preguntas ----------
   useEffect(() => {
     let isMounted = true
 
-    const fetchInitialSimulation = async () => {
-      // 1. Obtener detalles del simulacro
+    const init = async () => {
       const { data: simData, error: simError } = await supabase
         .from('simulations')
-        .select('*')
+        .select('id, title, type, duration_minutes_part1, duration_minutes_part2')
         .eq('id', simulationId)
         .single()
 
@@ -70,8 +108,20 @@ export default function StudentSimulationPage({ params }: { params: Promise<{ id
         return
       }
 
-      // 2. Cargar preguntas de la Jornada 1
-      const { data: qData } = await supabase
+      const { data: attemptData, error: attemptError } = await supabase.rpc('start_or_resume_attempt', {
+        p_simulation_id: simulationId,
+      })
+
+      if (attemptError || !attemptData) {
+        if (isMounted) {
+          alert(`No se pudo iniciar el intento: ${friendlyError(attemptError?.message)}`)
+          router.push('/dashboard/simulations')
+        }
+        return
+      }
+
+      // OJO: ya no se pide is_correct al navegador
+      const { data: qData, error: qError } = await supabase
         .from('simulation_questions')
         .select(`
           section_part,
@@ -84,248 +134,340 @@ export default function StudentSimulationPage({ params }: { params: Promise<{ id
               id,
               option_letter,
               option_text,
-              option_image_url,
-              is_correct
+              option_image_url
             )
           )
         `)
         .eq('simulation_id', simulationId)
         .order('question_order', { ascending: true })
 
-      if (isMounted) {
-        setSimulation(simData as SimulationData)
-        setTimeLeft(simData.duration_minutes_part1 * 60)
-
-        if (qData) {
-          const formatted = (qData as unknown as SimulationQuestion[])
-            .filter((sq) => sq.section_part === 1)
-            .map((sq) => sq.questions)
-          setQuestions(formatted)
+      if (qError || !qData) {
+        if (isMounted) {
+          alert('Error cargando las preguntas')
+          router.push('/dashboard/simulations')
         }
-        setLoading(false)
+        return
       }
+
+      if (!isMounted) return
+
+      const grouped: Record<number, Question[]> = { 1: [], 2: [] }
+      ;(qData as unknown as SimulationQuestion[]).forEach((sq) => {
+        if (!sq.questions) return
+        const part = sq.section_part === 2 ? 2 : 1
+        grouped[part].push({
+          ...sq.questions,
+          options: [...(sq.questions.options ?? [])].sort((a, b) =>
+            a.option_letter.localeCompare(b.option_letter)
+          ),
+        })
+      })
+
+      const sim = simData as SimulationData
+      const attempt = attemptData as AttemptState
+      const minutes =
+        attempt.current_section === 2 ? sim.duration_minutes_part2 ?? 0 : sim.duration_minutes_part1
+      const dl = computeDeadline(attempt.section_started_at, attempt.server_now, minutes)
+
+      setSimulation(sim)
+      setSections(grouped)
+      setAttemptId(attempt.attempt_id)
+      setCurrentPart(attempt.current_section === 2 ? 2 : 1)
+      setAnswers(attempt.answers ?? {})
+      setDeadline(dl)
+      setTimeLeft(secondsUntil(dl))
+      setLoading(false)
     }
 
-    fetchInitialSimulation()
+    init()
 
     return () => {
       isMounted = false
     }
   }, [supabase, simulationId, router])
 
-  // Iniciar Receso / Descanso entre Jornadas
-  const startBreak = useCallback(async () => {
-    setIsOnBreak(true)
-
-    // Cargar preguntas para la Jornada 2
-    const { data: qData } = await supabase
-      .from('simulation_questions')
-      .select(`
-        section_part,
-        question_order,
-        questions (
-          id,
-          statement,
-          image_url,
-          options (
-            id,
-            option_letter,
-            option_text,
-            option_image_url,
-            is_correct
-          )
-        )
-      `)
-      .eq('simulation_id', simulationId)
-      .order('question_order', { ascending: true })
-
-    if (qData && simulation) {
-      const formatted = (qData as unknown as SimulationQuestion[])
-        .filter((sq) => sq.section_part === 2)
-        .map((sq) => sq.questions)
-      setQuestions(formatted)
-      setCurrentPart(2)
-      setCurrentIndex(0)
-      setTimeLeft(simulation.duration_minutes_part2 * 60)
-    }
-  }, [supabase, simulationId, simulation])
-
-  // Enviar el examen y calcular el resultado
-  const handleFinishExam = useCallback(async () => {
-    if (submitting) return
-    setSubmitting(true)
-
-    const { data: userData } = await supabase.auth.getUser()
-    if (!userData.user) {
-      alert('Error de sesión al enviar respuestas.')
-      setSubmitting(false)
-      return
-    }
-
-    // 1. Calcular aciertos
-    let correctCount = 0
-    let totalQuestionsCount = 0
-
-    const { data: allOptions } = await supabase
-      .from('options')
-      .select('id, question_id, is_correct')
-
-    if (allOptions) {
-      const optionsMap = new Map(allOptions.map((o) => [o.id, o.is_correct]))
-      Object.values(selectedAnswers).forEach((optionId) => {
-        if (optionsMap.get(optionId)) correctCount++
-      })
-      totalQuestionsCount = Object.keys(selectedAnswers).length || 1
-    }
-
-    const calculatedScore = Math.round((correctCount / Math.max(totalQuestionsCount, 1)) * 500)
-
-    // 2. Registrar el intento
-    const { data: attemptData, error: attemptError } = await supabase
-      .from('student_attempts')
-      .insert({
-        student_id: userData.user.id,
-        simulation_id: simulationId,
-        score: calculatedScore,
-        finished_at: new Date().toISOString(),
-        is_completed: true,
-      })
-      .select()
-      .single()
-
-    if (attemptError || !attemptData) {
-      alert(`Error al guardar resultados: ${attemptError?.message}`)
-      setSubmitting(false)
-      return
-    }
-
-    // 3. Registrar cada respuesta seleccionada
-    const answersPayload = Object.entries(selectedAnswers).map(([qId, optId]) => ({
-      attempt_id: attemptData.id,
-      question_id: qId,
-      selected_option_id: optId,
-      is_correct: allOptions?.find((o) => o.id === optId)?.is_correct || false,
-    }))
-
-    if (answersPayload.length > 0) {
-      await supabase.from('attempt_answers').insert(answersPayload)
-    }
-
-    alert(`¡Simulacro finalizado! Tu puntaje estimado es: ${calculatedScore} / 500`)
-    router.push(`/dashboard/results/${attemptData.id}`)
-  }, [submitting, supabase, selectedAnswers, simulationId, router])
-
-  // Manejo de fin de tiempo por jornada
-  const handleTimeExpired = useCallback(() => {
-    if (simulation?.type === 'normal_jornadas' && currentPart === 1) {
-      alert('¡El tiempo de la primera jornada ha finalizado! Entras en receso.')
-      startBreak()
-    } else {
-      alert('¡El tiempo ha finalizado! Guardando tus respuestas...')
-      handleFinishExam()
-    }
-  }, [simulation, currentPart, startBreak, handleFinishExam])
-
-  // Cronómetro regresivo
+  // ---------- Cronómetro (se recalcula contra la hora límite, no se acumula) ----------
   useEffect(() => {
-    if (loading || isOnBreak || timeLeft <= 0) return
-
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer)
-          handleTimeExpired()
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
-
+    if (loading || deadline === null) return
+    const tick = () => setTimeLeft(secondsUntil(deadline))
+    const timer = setInterval(tick, 1000)
     return () => clearInterval(timer)
-  }, [loading, isOnBreak, timeLeft, handleTimeExpired])
+  }, [loading, deadline])
 
-  const resumePart2 = () => {
-    setIsOnBreak(false)
-  }
+  // ---------- Guardado en tiempo real ----------
+  const persistAnswer = useCallback(
+    async (questionId: string, optionId: string) => {
+      if (!attemptId) return
+      const { error } = await supabase.rpc('save_answer', {
+        p_attempt_id: attemptId,
+        p_question_id: questionId,
+        p_option_id: optionId,
+      })
 
-  // Seleccionar respuesta para la pregunta actual
+      if (error) {
+        // Errores definitivos: no tiene sentido reintentar
+        if (/Tiempo agotado|ya fue finalizado/i.test(error.message)) {
+          unsavedRef.current.delete(questionId)
+        }
+        setSaveStatus(unsavedRef.current.size === 0 ? 'saved' : 'error')
+        return
+      }
+
+      if (unsavedRef.current.get(questionId) === optionId) {
+        unsavedRef.current.delete(questionId)
+      }
+      setSaveStatus(unsavedRef.current.size === 0 ? 'saved' : 'saving')
+    },
+    [supabase, attemptId]
+  )
+
+  const flushUnsaved = useCallback(async () => {
+    const pending = Array.from(unsavedRef.current.entries())
+    await Promise.all(pending.map(([qId, optId]) => persistAnswer(qId, optId)))
+  }, [persistAnswer])
+
+  // Reintento automático si hubo fallas de conexión
+  useEffect(() => {
+    if (!attemptId) return
+    const timer = setInterval(() => {
+      unsavedRef.current.forEach((optId, qId) => {
+        void persistAnswer(qId, optId)
+      })
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [attemptId, persistAnswer])
+
   const handleSelectOption = (questionId: string, optionId: string) => {
-    setSelectedAnswers((prev) => ({
-      ...prev,
-      [questionId]: optionId,
-    }))
+    setAnswers((prev) => ({ ...prev, [questionId]: optionId }))
+    unsavedRef.current.set(questionId, optionId)
+    setSaveStatus('saving')
+    void persistAnswer(questionId, optionId)
   }
 
-  // Formato MM:SS o HH:MM:SS para el cronómetro
+  // ---------- Valores derivados ----------
+  const hasTwoSections = (simulation?.duration_minutes_part2 ?? 0) > 0 && sections[2].length > 0
+  const questions = sections[currentPart] ?? []
+  const unansweredList = questions
+    .map((q, idx) => ({ q, idx }))
+    .filter(({ q }) => !answers[q.id])
+  const answeredCount = questions.length - unansweredList.length
+  const canFinishSection = questions.length > 0 && unansweredList.length === 0
+  const showBreak =
+    !loading && hasTwoSections && currentPart === 1 && (section1Done || timeLeft <= 0)
+
+  // ---------- Finalizar ----------
+  const handleFinish = useCallback(
+    async (force: boolean) => {
+      if (!attemptId || submittingRef.current) return
+      submittingRef.current = true
+      setSubmitting(true)
+
+      await flushUnsaved()
+
+      if (!force && unsavedRef.current.size > 0) {
+        alert('No se pudieron guardar todas tus respuestas. Revisa tu conexión e inténtalo de nuevo.')
+        submittingRef.current = false
+        setSubmitting(false)
+        return
+      }
+
+      const { data, error } = await supabase.rpc('finish_attempt', {
+        p_attempt_id: attemptId,
+        p_force: force,
+      })
+
+      if (error || !data) {
+        if (!force) alert(`No se pudo finalizar: ${friendlyError(error?.message)}`)
+        submittingRef.current = false
+        setSubmitting(false)
+        if (force) {
+          // Reintenta el envío automático en 5 segundos
+          setTimeout(() => {
+            autoFinishRef.current = false
+            setRetryTick((t) => t + 1)
+          }, 5000)
+        }
+        return
+      }
+
+      const result = data as FinishResult
+      alert(
+        `¡Simulacro finalizado! Tu puntaje es: ${result.score} / 500 (${result.correct} de ${result.total} correctas)`
+      )
+      router.push(`/dashboard/results/${result.attempt_id}`)
+    },
+    [attemptId, flushUnsaved, supabase, router]
+  )
+
+  // Fin de tiempo: en la última sección se envía solo
+  useEffect(() => {
+    if (loading || !attemptId || deadline === null || submitting) return
+    if (timeLeft > 0 || showBreak || autoFinishRef.current) return
+    autoFinishRef.current = true
+    void handleFinish(true)
+  }, [loading, attemptId, deadline, submitting, timeLeft, showBreak, handleFinish, retryTick])
+
+  // ---------- Pasar a la Sección 2 ----------
+  const handleStartSection2 = async () => {
+    if (!attemptId || !simulation || advancing) return
+    setAdvancing(true)
+
+    await flushUnsaved()
+    const expired = timeLeft <= 0
+
+    if (!expired && unsavedRef.current.size > 0) {
+      alert('No se pudieron guardar todas tus respuestas. Revisa tu conexión e inténtalo de nuevo.')
+      setAdvancing(false)
+      return
+    }
+
+    const { data, error } = await supabase.rpc('advance_section', {
+      p_attempt_id: attemptId,
+      p_force: expired,
+    })
+
+    if (error || !data) {
+      alert(`No se pudo pasar a la Sección 2: ${friendlyError(error?.message)}`)
+      setAdvancing(false)
+      return
+    }
+
+    const att = data as AttemptState
+    const dl = computeDeadline(
+      att.section_started_at,
+      att.server_now,
+      simulation.duration_minutes_part2 ?? 0
+    )
+
+    setCurrentPart(2)
+    setCurrentIndex(0)
+    setSection1Done(false)
+    setDeadline(dl)
+    setTimeLeft(secondsUntil(dl))
+    setAdvancing(false)
+  }
+
+  // Botón principal de fin de sección / examen
+  const handleMainAction = () => {
+    if (!canFinishSection || submitting) return
+
+    if (hasTwoSections && currentPart === 1) {
+      if (confirm('¿Terminar la Sección 1? Después no podrás volver a ella.')) {
+        setSection1Done(true)
+      }
+      return
+    }
+
+    if (confirm('¿Finalizar y enviar el simulacro? No podrás modificar tus respuestas.')) {
+      void handleFinish(false)
+    }
+  }
+
   const formatTime = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600)
     const mins = Math.floor((seconds % 3600) / 60)
     const secs = seconds % 60
     if (hrs > 0) {
-      return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+      return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs
+        .toString()
+        .padStart(2, '0')}`
     }
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
   }
 
+  // ---------- Render ----------
   if (loading) {
     return <div className="p-12 text-center text-slate-500 font-medium">Cargando simulacro...</div>
   }
 
-  // Pantalla de Receso entre Jornadas
-  if (isOnBreak) {
+  if (showBreak) {
+    const expired = timeLeft <= 0
+    const missing = sections[1].filter((q) => !answers[q.id]).length
+
     return (
       <div className="max-w-xl mx-auto my-16 p-8 bg-white rounded-2xl border border-slate-200 shadow-md text-center space-y-6">
         <div className="inline-block p-4 bg-amber-50 text-amber-600 rounded-full text-3xl">☕</div>
-        <h1 className="text-2xl font-bold text-slate-800">Receso entre Jornadas</h1>
+        <h1 className="text-2xl font-bold text-slate-800">
+          {expired ? 'Se terminó el tiempo de la Sección 1' : 'Sección 1 completada'}
+        </h1>
         <p className="text-slate-600 text-sm">
-          Has completado la **Jornada 1**. Tómate un tiempo para descansar. Cuando estés listo, haz clic en el botón para comenzar la **Jornada 2**.
+          {expired && missing > 0
+            ? `Quedaron ${missing} pregunta(s) sin responder en la Sección 1. `
+            : ''}
+          Tómate un momento para descansar. El tiempo de la <strong>Sección 2</strong> empieza a
+          correr cuando presiones el botón y no podrás volver a la Sección 1.
         </p>
         <button
-          onClick={resumePart2}
-          className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg shadow-sm transition-colors"
+          onClick={handleStartSection2}
+          disabled={advancing}
+          className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg shadow-sm transition-colors disabled:opacity-50"
         >
-          Iniciar Jornada 2
+          {advancing ? 'Cargando...' : 'Iniciar Sección 2'}
         </button>
       </div>
     )
   }
 
   const currentQuestion = questions[currentIndex]
+  const isLastQuestion = currentIndex >= questions.length - 1
+  const mainActionLabel =
+    hasTwoSections && currentPart === 1 ? 'Terminar Sección 1' : 'Finalizar Examen'
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* Encabezado Superior con Cronómetro */}
       <header className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center sticky top-0 z-10 shadow-md">
         <div>
           <h1 className="font-bold text-sm md:text-base text-slate-100">{simulation?.title}</h1>
           <p className="text-xs text-slate-400">
-            {simulation?.type === 'normal_jornadas' ? `Jornada ${currentPart}` : 'Sesión Única'}
+            {hasTwoSections ? `Sección ${currentPart} de 2` : 'Sesión Única'}
           </p>
         </div>
 
-        <div className="flex items-center space-x-6">
-          <div className={`px-4 py-1.5 rounded-full font-mono text-sm font-bold ${
-            timeLeft < 300 ? 'bg-rose-500 text-white animate-pulse' : 'bg-slate-800 text-amber-400'
-          }`}>
+        <div className="flex items-center space-x-4 md:space-x-6">
+          <span
+            className={`hidden sm:inline text-[11px] font-semibold ${
+              saveStatus === 'saved'
+                ? 'text-emerald-400'
+                : saveStatus === 'saving'
+                ? 'text-slate-400'
+                : 'text-rose-400'
+            }`}
+          >
+            {saveStatus === 'saved'
+              ? '✓ Guardado'
+              : saveStatus === 'saving'
+              ? 'Guardando...'
+              : '⚠ Sin conexión, reintentando'}
+          </span>
+
+          <div
+            className={`px-4 py-1.5 rounded-full font-mono text-sm font-bold ${
+              timeLeft < 300 ? 'bg-rose-500 text-white animate-pulse' : 'bg-slate-800 text-amber-400'
+            }`}
+          >
             ⏱ {formatTime(timeLeft)}
           </div>
 
           <button
-            onClick={() => {
-              if (confirm('¿Deseas finalizar y enviar el simulacro ahora?')) handleFinishExam()
-            }}
-            disabled={submitting}
-            className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-xs font-semibold text-white rounded-md transition-colors disabled:opacity-50"
+            onClick={handleMainAction}
+            disabled={submitting || !canFinishSection}
+            title={
+              canFinishSection
+                ? undefined
+                : `Te faltan ${unansweredList.length} pregunta(s) por responder`
+            }
+            className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-xs font-semibold text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {submitting ? 'Enviando...' : 'Finalizar Examen'}
+            {submitting
+              ? 'Enviando...'
+              : canFinishSection
+              ? mainActionLabel
+              : `Faltan ${unansweredList.length}`}
           </button>
         </div>
       </header>
 
-      {/* Cuerpo Principal */}
       <div className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
-        
-        {/* Pregunta Actual */}
         <div className="lg:col-span-3 bg-white p-6 md:p-8 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
           {currentQuestion ? (
             <div className="space-y-6">
@@ -335,7 +477,6 @@ export default function StudentSimulationPage({ params }: { params: Promise<{ id
                 </span>
               </div>
 
-              {/* Enunciado e Imagen opcional */}
               <div className="space-y-4">
                 <p className="text-slate-800 text-base md:text-lg leading-relaxed whitespace-pre-line font-medium">
                   {currentQuestion.statement}
@@ -352,52 +493,48 @@ export default function StudentSimulationPage({ params }: { params: Promise<{ id
                 )}
               </div>
 
-              {/* Opciones de Respuesta */}
               <div className="space-y-3 pt-2">
-                {currentQuestion.options
-                  .sort((a, b) => a.option_letter.localeCompare(b.option_letter))
-                  .map((opt) => {
-                    const isSelected = selectedAnswers[currentQuestion.id] === opt.id
-                    return (
-                      <button
-                        key={opt.id}
-                        onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
-                        className={`w-full text-left p-4 rounded-xl border transition-all flex items-start space-x-3 ${
-                          isSelected
-                            ? 'border-blue-600 bg-blue-50/60 ring-2 ring-blue-500/20'
-                            : 'border-slate-200 hover:bg-slate-50'
+                {currentQuestion.options.map((opt) => {
+                  const isSelected = answers[currentQuestion.id] === opt.id
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => handleSelectOption(currentQuestion.id, opt.id)}
+                      className={`w-full text-left p-4 rounded-xl border transition-all flex items-start space-x-3 ${
+                        isSelected
+                          ? 'border-blue-600 bg-blue-50/60 ring-2 ring-blue-500/20'
+                          : 'border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span
+                        className={`flex-shrink-0 w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center ${
+                          isSelected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700'
                         }`}
                       >
-                        <span
-                          className={`flex-shrink-0 w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center ${
-                            isSelected
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          {opt.option_letter}
-                        </span>
+                        {opt.option_letter}
+                      </span>
 
-                        <div className="flex-1 text-sm text-slate-800 pt-0.5">
-                          {opt.option_text && <p>{opt.option_text}</p>}
-                          {opt.option_image_url && (
-                            <img
-                              src={opt.option_image_url}
-                              alt={`Opción ${opt.option_letter}`}
-                              className="mt-2 max-h-40 rounded border"
-                            />
-                          )}
-                        </div>
-                      </button>
-                    )
-                  })}
+                      <div className="flex-1 text-sm text-slate-800 pt-0.5">
+                        {opt.option_text && <p>{opt.option_text}</p>}
+                        {opt.option_image_url && (
+                          <img
+                            src={opt.option_image_url}
+                            alt={`Opción ${opt.option_letter}`}
+                            className="mt-2 max-h-40 rounded border"
+                          />
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           ) : (
-            <p className="text-slate-500 text-center py-12">No hay preguntas disponibles en esta sección.</p>
+            <p className="text-slate-500 text-center py-12">
+              No hay preguntas disponibles en esta sección.
+            </p>
           )}
 
-          {/* Botones de Navegación */}
           <div className="flex justify-between items-center border-t pt-6 mt-8">
             <button
               disabled={currentIndex === 0}
@@ -407,41 +544,41 @@ export default function StudentSimulationPage({ params }: { params: Promise<{ id
               ← Anterior
             </button>
 
-            {currentIndex < questions.length - 1 ? (
+            {!isLastQuestion ? (
               <button
                 onClick={() => setCurrentIndex((prev) => prev + 1)}
                 className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-md text-xs font-semibold"
               >
                 Siguiente →
               </button>
-            ) : simulation?.type === 'normal_jornadas' && currentPart === 1 ? (
-              <button
-                onClick={startBreak}
-                className="px-6 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-xs font-semibold"
-              >
-                Ir a Receso / Jornada 2 →
-              </button>
             ) : (
               <button
-                onClick={handleFinishExam}
-                disabled={submitting}
-                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md text-xs font-semibold"
+                onClick={handleMainAction}
+                disabled={submitting || !canFinishSection}
+                className={`px-6 py-2 text-white rounded-md text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed ${
+                  hasTwoSections && currentPart === 1
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
               >
-                {submitting ? 'Enviando...' : 'Finalizar Examen'}
+                {submitting
+                  ? 'Enviando...'
+                  : canFinishSection
+                  ? `${mainActionLabel} →`
+                  : `Faltan ${unansweredList.length} por responder`}
               </button>
             )}
           </div>
         </div>
 
-        {/* Panel Lateral: Mapa de Preguntas */}
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm h-fit space-y-4">
           <h2 className="text-sm font-bold text-slate-800 border-b pb-2">
-            Navegación ({Object.keys(selectedAnswers).length}/{questions.length} respondidas)
+            Navegación ({answeredCount}/{questions.length} respondidas)
           </h2>
 
           <div className="grid grid-cols-5 gap-2 max-h-96 overflow-y-auto p-1">
             {questions.map((q, idx) => {
-              const isAnswered = !!selectedAnswers[q.id]
+              const isAnswered = !!answers[q.id]
               const isCurrent = idx === currentIndex
 
               return (
@@ -461,8 +598,29 @@ export default function StudentSimulationPage({ params }: { params: Promise<{ id
               )
             })}
           </div>
-        </div>
 
+          {unansweredList.length > 0 && (
+            <div className="border-t pt-3 space-y-2">
+              <p className="text-[11px] font-bold text-rose-600">
+                Sin responder ({unansweredList.length}):
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {unansweredList.slice(0, 30).map(({ idx }) => (
+                  <button
+                    key={idx}
+                    onClick={() => setCurrentIndex(idx)}
+                    className="px-2 py-0.5 text-[11px] font-semibold rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                  >
+                    {idx + 1}
+                  </button>
+                ))}
+                {unansweredList.length > 30 && (
+                  <span className="text-[11px] text-slate-400">...</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
