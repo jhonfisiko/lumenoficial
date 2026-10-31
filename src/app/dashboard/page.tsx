@@ -263,8 +263,8 @@ export default function StudentDashboardPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-4 w-full md:w-auto">
-            <div className="bg-slate-950/80 border border-slate-800 p-4 rounded-2xl text-center flex-1 md:flex-none min-w-[140px]">
+          <div className="flex items-stretch gap-3 w-full md:w-auto">
+            <div className="bg-slate-950/80 border border-slate-800 p-4 rounded-2xl text-center flex-1 md:flex-none md:min-w-[140px]">
               <p className="text-[10px] text-slate-400 uppercase font-black tracking-wider">Promedio Global</p>
               <p className="text-3xl font-black text-amber-400 mt-0.5">{averageScore}</p>
               <p className="text-[9px] text-slate-500 font-bold">Puntos de 500</p>
@@ -272,7 +272,7 @@ export default function StudentDashboardPage() {
 
             <Link
               href="/dashboard/materials"
-              className="hidden sm:flex flex-col items-center justify-center p-4 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-400 rounded-2xl transition-all text-center min-w-[120px]"
+              className="flex flex-col items-center justify-center p-4 flex-1 md:flex-none md:min-w-[120px] bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 text-orange-400 rounded-2xl transition-all text-center"
             >
               <span className="text-xl mb-1">📚</span>
               <span className="text-[10px] font-black uppercase">Biblioteca</span>
